@@ -50,6 +50,68 @@ function decodeEntities(source: string): string {
   );
 }
 
+interface ProtectedInlineCode {
+  source: string;
+  restore(source: string): string;
+}
+
+function protectInlineCode(source: string): ProtectedInlineCode {
+  const values: string[] = [];
+  let tokenPrefix = "\uE000CODE";
+  while (source.includes(tokenPrefix)) tokenPrefix += "X";
+  let protectedSource = "";
+
+  for (let index = 0; index < source.length; ) {
+    if (source[index] !== "`") {
+      protectedSource += source[index++];
+      continue;
+    }
+
+    const openingStart = index;
+    while (source[index] === "`") index++;
+    const delimiterLength = index - openingStart;
+    let closingStart = index;
+
+    while (closingStart < source.length) {
+      closingStart = source.indexOf("`", closingStart);
+      if (closingStart === -1) break;
+      let closingEnd = closingStart;
+      while (source[closingEnd] === "`") closingEnd++;
+      if (closingEnd - closingStart === delimiterLength) break;
+      closingStart = closingEnd;
+    }
+
+    if (closingStart === -1 || closingStart >= source.length) {
+      protectedSource += source.slice(openingStart, index);
+      continue;
+    }
+
+    let value = source.slice(index, closingStart).replace(/\r?\n/g, " ");
+    if (
+      value.startsWith(" ") &&
+      value.endsWith(" ") &&
+      /[^ ]/.test(value)
+    ) {
+      value = value.slice(1, -1);
+    }
+    const token = `${tokenPrefix}${values.length}\uE001`;
+    values.push(value);
+    protectedSource += token;
+    index = closingStart + delimiterLength;
+  }
+
+  return {
+    source: protectedSource,
+    restore(normalizedSource: string) {
+      return values.reduce(
+        (result, value, index) =>
+          result.replaceAll(`${tokenPrefix}${index}\uE001`, value),
+        normalizedSource,
+      );
+    },
+  };
+}
+
 export function normalizeVisibleText(source: string): string {
   const sourceLines = source.split(/\r?\n/);
   const openingFence = sourceLines[0]?.match(/^\s*(`{3,}|~{3,})(.*)$/);
@@ -63,7 +125,8 @@ export function normalizeVisibleText(source: string): string {
     return sourceLines.slice(1, -1).join(" ").replace(/\s+/g, " ").trim();
   }
 
-  const visibleLines = source
+  const inlineCode = protectInlineCode(source);
+  const visibleLines = inlineCode.source
     .split(/\r?\n/)
     .filter((line) => {
       const trimmed = line.trim();
@@ -84,14 +147,13 @@ export function normalizeVisibleText(source: string): string {
     )
     .join(" ");
 
-  return decodeEntities(visibleLines)
+  const normalized = decodeEntities(visibleLines)
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
     .replace(/<((?:https?:\/\/|mailto:)[^>]+)>/g, "$1")
     .replace(/<\/?[A-Za-z][^>]*>/g, "")
-    .replace(/`+([^`]+?)`+/g, "$1")
     .replace(/\\([\\`*_[\]{}()#+.!|>-])/g, "$1")
     .replace(/(\*\*|~~)(?=\S)(.+?\S)\1/g, "$2")
     .replace(
@@ -105,6 +167,7 @@ export function normalizeVisibleText(source: string): string {
     )
     .replace(/\s+/g, " ")
     .trim();
+  return inlineCode.restore(normalized);
 }
 
 function block(
@@ -141,6 +204,10 @@ function isThematicBreak(line: string): boolean {
   return /^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/.test(line);
 }
 
+function isSetextUnderline(line: string): boolean {
+  return /^\s*(?:=+|-+)\s*$/.test(line);
+}
+
 function startsBlock(line: string): boolean {
   return (
     /^\s{0,3}#{1,6}(?:\s+|$)/.test(line) ||
@@ -149,6 +216,17 @@ function startsBlock(line: string): boolean {
     Boolean(fenceAt(line)) ||
     Boolean(colonDirectiveAt(line))
   );
+}
+
+function findSetextUnderline(
+  lines: string[],
+  start: number,
+): number | undefined {
+  for (let index = start + 1; index < lines.length; index++) {
+    if (isSetextUnderline(lines[index])) return index;
+    if (!lines[index].trim() || startsBlock(lines[index])) return undefined;
+  }
+  return undefined;
 }
 
 export function segmentMarkdown(source: string): SourceBlock[] {
@@ -232,13 +310,17 @@ export function segmentMarkdown(source: string): SourceBlock[] {
       continue;
     }
 
-    if (
-      index + 1 < lines.length &&
-      /^\s*(?:=+|-+)\s*$/.test(lines[index + 1])
-    ) {
-      const candidate = block("heading", lines, index, index + 1, lines[index]);
+    const setextUnderline = findSetextUnderline(lines, index);
+    if (setextUnderline !== undefined) {
+      const candidate = block(
+        "heading",
+        lines,
+        index,
+        setextUnderline,
+        lines.slice(index, setextUnderline).join("\n"),
+      );
       if (candidate) blocks.push(candidate);
-      index += 2;
+      index = setextUnderline + 1;
       continue;
     }
 
@@ -263,11 +345,7 @@ export function segmentMarkdown(source: string): SourceBlock[] {
     while (
       index < lines.length &&
       lines[index].trim() &&
-      !startsBlock(lines[index]) &&
-      !(
-        index + 1 < lines.length &&
-        /^\s*(?:=+|-+)\s*$/.test(lines[index + 1])
-      )
+      !startsBlock(lines[index])
     ) {
       index++;
     }

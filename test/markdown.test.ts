@@ -151,6 +151,34 @@ describe("segmentMarkdown", () => {
       "After.",
     ]);
   });
+
+  it("segments multiline Setext headings as one source block", () => {
+    const source = [
+      "A heading with `literal_*_`",
+      "that spans **two** content lines",
+      "================================",
+      "",
+      "Following paragraph.",
+    ].join("\n");
+
+    expect(segmentMarkdown(source)).toEqual([
+      {
+        kind: "heading",
+        startLine: 1,
+        endLine: 3,
+        source:
+          "A heading with `literal_*_`\nthat spans **two** content lines\n================================",
+        text: "A heading with literal_*_ that spans two content lines",
+      },
+      {
+        kind: "paragraph",
+        startLine: 5,
+        endLine: 5,
+        source: "Following paragraph.",
+        text: "Following paragraph.",
+      },
+    ]);
+  });
 });
 
 describe("normalizeVisibleText", () => {
@@ -192,5 +220,15 @@ describe("normalizeVisibleText", () => {
     expect(
       normalizeVisibleText("Invalid: &#999999999999; and &#x110000;."),
     ).toBe("Invalid: &#999999999999; and &#x110000;.");
+  });
+
+  it("preserves literal inline-code contents while removing delimiters", () => {
+    expect(
+      normalizeVisibleText(
+        "Use `<tag> **bold** snake_case &amp; [label](target)` or ``one ` tick``.",
+      ),
+    ).toBe(
+      "Use <tag> **bold** snake_case &amp; [label](target) or one ` tick.",
+    );
   });
 });

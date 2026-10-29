@@ -100,3 +100,41 @@ Result: exit 0, 5 test files passed, 47 tests passed, TypeScript compilation com
 - Underscore emphasis requires non-word boundaries, preserving intraword single and double underscores while still normalizing standalone emphasis.
 - Numeric entities are decoded only for valid Unicode scalar values. Invalid, unsafe, null, surrogate, and out-of-range values remain unchanged, so normalization cannot throw on them.
 - No new blocking concerns found. Complex inline Markdown remains intentionally conservative, and npm still emits the pre-existing `devdir` configuration warning.
+
+## Final findings fixes
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 1, 1 test file failed, 2 tests failed, and 9 passed. Inline-code contents were altered by HTML, entity, link, and emphasis normalization after delimiters were removed. A two-line Setext heading was split into a paragraph and a heading beginning on its second content line.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 0, 1 test file passed and 11 tests passed.
+
+Full verification:
+
+```text
+npm test && npm run build && git diff --check
+```
+
+Result: exit 0, 5 test files passed, 49 tests passed, TypeScript compilation completed successfully, and Git reported no whitespace errors.
+
+### Self-review
+
+- Inline code is extracted before all block and inline normalization, represented by collision-resistant placeholders, and restored afterward. Literal HTML, entities, links, emphasis markers, and intraword underscores inside code spans are preserved.
+- Backtick runs close only on an equal-length run. CommonMark code-span line endings and surrounding-space handling are applied before restoration.
+- Setext detection scans contiguous paragraph content for its underline, then emits one heading with the full source range and all content lines as visible text.
+- A hyphen underline after paragraph content remains a Setext heading, while standalone thematic breaks remain excluded.
+- No new blocking concerns found. The normalizer remains intentionally conservative for complex Markdown, and npm still emits the pre-existing `devdir` configuration warning.
