@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { ChangedFile, ReviewModel } from "../src/model.js";
 import { createDashboard } from "../src/ui/dashboard.js";
-import { createHighlighterScript } from "../src/ui/highlighter.js";
+import {
+  createHighlighterData,
+  parentHighlighterScript,
+} from "../src/ui/highlighter.js";
 import { reviewStyles } from "../src/ui/styles.js";
 
 const rootFile: ChangedFile = {
@@ -57,6 +60,9 @@ describe("generated browser assets", () => {
       'href="/docs/guide?review-source=docs%2F_snippets%2Fshared.md"',
     );
     expect(dashboard).toContain('target="docs-preview"');
+    expect(dashboard).toContain(
+      'data-source-file="docs/_snippets/shared.md"',
+    );
   });
 
   it("renders an integrated, grouped review app with filters and badges", () => {
@@ -155,8 +161,8 @@ describe("generated browser assets", () => {
     expect(dashboard).toContain(
       '<iframe name="docs-preview" title="Documentation preview"',
     );
-    expect(dashboard).toContain('sandbox="allow-scripts"');
-    expect(dashboard).not.toContain("allow-same-origin");
+    expect(dashboard).toContain('sandbox="allow-same-origin"');
+    expect(dashboard).not.toContain("allow-scripts");
     expect(dashboard).toContain('target="docs-preview"');
     expect(dashboard).toContain('class="preview-empty"');
     expect(dashboard).toContain("Select a page to preview");
@@ -236,6 +242,10 @@ describe("generated browser assets", () => {
     const dashboard = createDashboard(review);
     expect(dashboard).not.toContain("<script>alert");
     expect(dashboard).not.toContain("<img src=x");
+    expect(dashboard).toContain(
+      '<script type="application/json" id="review-data">',
+    );
+    expect(dashboard).toContain("\\u003cscript\\u003e");
     expect(dashboard).toContain("&lt;main &amp; &quot;next&quot;&gt;");
     expect(dashboard).toContain(
       "&lt;script&gt;alert(&quot;file&quot;)&lt;/script&gt;.md",
@@ -284,16 +294,22 @@ describe("generated browser assets", () => {
     expect(reloads).toBe(1);
   });
 
-  it("emits syntactically valid, injection-safe highlighter JavaScript", () => {
-    const script = createHighlighterScript(rootFile);
+  it("embeds script-safe parent highlighter data", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/canonical/repository",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [rootFile],
+      warnings: [],
+    };
+    const data = createHighlighterData(review);
 
-    expect(() => new Function(script)).not.toThrow();
-    expect(script).not.toContain("</script>");
-    expect(script).toContain("\\u003c/script\\u003e");
-    expect(script).toContain("uniqueExact");
-    expect(script).toContain("uniqueTokenMatch");
-    expect(script).toContain("Unmatched");
-    expect(script).toContain("Deleted source");
+    expect(data).not.toContain("</script>");
+    expect(data).toContain("\\u003c/script\\u003e");
+    expect(JSON.parse(data)).toMatchObject({
+      repositoryPath: "/canonical/repository",
+      files: [{ path: "index.md" }],
+    });
   });
 
   it("uses the shared Markdown normalizer for browser matching text", () => {
@@ -309,17 +325,38 @@ describe("generated browser assets", () => {
       ],
     };
 
-    expect(createHighlighterScript(file)).toContain(
-      '"text":"Read the guide"',
-    );
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [file],
+      warnings: [],
+    };
+    expect(createHighlighterData(review)).toContain('"text":"Read the guide"');
   });
 
-  it("reloads the preview when the app broadcasts a refresh", () => {
-    const script = createHighlighterScript(rootFile);
+  it("runs matching and review controls only in the trusted parent", () => {
+    expect(() => new Function(parentHighlighterScript)).not.toThrow();
+    expect(parentHighlighterScript).toContain("preview.contentDocument");
+    expect(parentHighlighterScript).toContain("uniqueExact");
+    expect(parentHighlighterScript).toContain("uniqueTokenMatch");
+    expect(parentHighlighterScript).toContain("Previous");
+    expect(parentHighlighterScript).toContain("Next");
+    expect(parentHighlighterScript).toContain("matched");
+    expect(parentHighlighterScript).toContain("unmatched");
+    expect(parentHighlighterScript).toContain("mapping-status");
+    expect(parentHighlighterScript).toContain("Open source");
+    expect(parentHighlighterScript).toContain("vscode://file");
+    expect(parentHighlighterScript).toContain("deleted-inline");
+    expect(parentHighlighterScript).toContain("nearest");
+    expect(parentHighlighterScript).toContain("deleted-fallback");
+    expect(parentHighlighterScript).not.toContain("EventSource");
+  });
 
-    expect(script).toContain('new EventSource("/api/events")');
-    expect(script).toContain('addEventListener("refresh"');
-    expect(script).toContain("window.location.reload()");
+  it("keeps malicious upstream code outside the trusted runtime", () => {
+    expect(parentHighlighterScript).not.toContain("__maliciousDocsScript");
+    expect(parentHighlighterScript).not.toContain("eval(");
+    expect(parentHighlighterScript).not.toContain("new Function");
   });
 
   it("exports distinct added and modified highlight styles", () => {

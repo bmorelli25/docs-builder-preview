@@ -1,5 +1,9 @@
 import type { ChangedFile, ReviewModel } from "../model.js";
 import { sourcePathToRoute } from "../routes.js";
+import {
+  createHighlighterData,
+  parentHighlighterScript,
+} from "./highlighter.js";
 
 function escapeHtml(value: string): string {
   return value.replace(
@@ -49,8 +53,9 @@ function itemAttributes(file: ChangedFile, extraSearch = ""): string {
 function pageItem(file: ChangedFile): string {
   const href = previewHref(file.route!);
   return `<li ${itemAttributes(file)}>
-    <a class="review-link" href="${escapeHtml(href)}" target="docs-preview">
+    <a class="review-link" href="${escapeHtml(href)}" target="docs-preview" data-source-file="${escapeHtml(file.path)}">
       ${fileSummary(file)}
+      <span class="mapping-status" data-mapping="pending">Not mapped</span>
     </a>
   </li>`;
 }
@@ -63,9 +68,10 @@ function snippetItem(file: ChangedFile): string {
       const separator = route.includes("?") ? "&" : "?";
       const href = `${route}${separator}review-source=${encodeURIComponent(file.path)}`;
       return `<li>
-        <a class="review-link consumer-link" href="${escapeHtml(href)}" target="docs-preview">
+        <a class="review-link consumer-link" href="${escapeHtml(href)}" target="docs-preview" data-source-file="${escapeHtml(file.path)}">
           <span>${escapeHtml(consumer)}</span>
           <span class="consumer-label">Preview consumer</span>
+          <span class="mapping-status" data-mapping="pending">Not mapped</span>
         </a>
       </li>`;
     })
@@ -341,6 +347,16 @@ export function createDashboard(review: ReviewModel): string {
       white-space: nowrap;
     }
     .consumer-label { flex: none; color: #64748b; font-size: 10px; }
+    .mapping-status {
+      display: block;
+      margin-top: 5px;
+      color: #64748b;
+      font-size: 10px;
+    }
+    .mapping-status[data-mapping="matched"] { color: #15803d; }
+    .mapping-status[data-mapping="partial"] { color: #a16207; }
+    .mapping-status[data-mapping="unmatched"] { color: #b91c1c; }
+    .consumer-link .mapping-status { margin: 0 0 0 auto; }
     .no-results {
       margin: 28px 14px;
       color: #64748b;
@@ -349,6 +365,42 @@ export function createDashboard(review: ReviewModel): string {
     }
     .preview-pane { position: relative; min-width: 0; min-height: 0; background: #fff; }
     .preview-pane iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+    .preview-toolbar {
+      position: absolute;
+      z-index: 3;
+      right: 16px;
+      bottom: 16px;
+      width: min(420px, calc(100% - 32px));
+      padding: 11px;
+      border: 1px solid #334155;
+      border-radius: 9px;
+      color: #f8fafc;
+      background: #0f172a;
+      box-shadow: 0 10px 30px rgb(15 23 42 / 30%);
+      font-size: 12px;
+    }
+    .toolbar-row { display: flex; align-items: center; gap: 7px; }
+    .preview-toolbar button, .preview-toolbar a {
+      padding: 5px 8px;
+      border: 1px solid #64748b;
+      border-radius: 5px;
+      color: inherit;
+      background: #1e293b;
+      text-decoration: none;
+    }
+    .preview-toolbar button:disabled { cursor: not-allowed; opacity: .45; }
+    #mapping-counts { margin-left: auto; }
+    #unmatched-panel, #deleted-fallback {
+      max-height: 130px;
+      margin-top: 8px;
+      overflow: auto;
+    }
+    #unmatched-list { margin: 6px 0 0; padding-left: 18px; }
+    #deleted-fallback pre {
+      margin: 6px 0 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
     .preview-empty {
       position: absolute;
       inset: 0;
@@ -416,7 +468,20 @@ export function createDashboard(review: ReviewModel): string {
         </nav>
       </aside>
       <section class="preview-pane" aria-label="Page preview">
-        <iframe name="docs-preview" title="Documentation preview" sandbox="allow-scripts"></iframe>
+        <iframe name="docs-preview" title="Documentation preview" sandbox="allow-same-origin"></iframe>
+        <aside class="preview-toolbar" id="preview-toolbar" aria-label="Review mapping controls" hidden>
+          <div class="toolbar-row">
+            <button type="button" id="review-previous">Previous</button>
+            <button type="button" id="review-next">Next</button>
+            <a id="open-source" href="#" target="_blank" rel="noreferrer" hidden>Open source</a>
+            <span id="mapping-counts">0 matched · 0 unmatched</span>
+          </div>
+          <details id="unmatched-panel" hidden>
+            <summary>Unmatched source blocks</summary>
+            <ul id="unmatched-list"></ul>
+          </details>
+          <div id="deleted-fallback" aria-label="Deleted source without a nearby surviving block"></div>
+        </aside>
         <div class="preview-empty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-1.5Z"/><path d="M4 17h14M8 7h6M8 11h7"/></svg>
           <strong>Select a page to preview</strong>
@@ -425,6 +490,7 @@ export function createDashboard(review: ReviewModel): string {
       </section>
     </main>
   </div>
+  <script type="application/json" id="review-data">${createHighlighterData(review)}</script>
   <script>
     const reviewEvents = new EventSource("/api/events");
     reviewEvents.addEventListener("refresh", () => {
@@ -536,6 +602,7 @@ export function createDashboard(review: ReviewModel): string {
       }
     }
   </script>
+  <script>${parentHighlighterScript}</script>
 </body>
 </html>`;
 }

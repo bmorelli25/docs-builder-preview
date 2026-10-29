@@ -1,7 +1,8 @@
-import type { ChangedFile } from "../model.js";
+import type { ReviewModel } from "../model.js";
 import { normalizeVisibleText } from "../markdown.js";
+import { reviewStyles } from "./styles.js";
 
-function safeJson(value: unknown): string {
+export function safeJson(value: unknown): string {
   return JSON.stringify(value)
     .replaceAll("<", "\\u003c")
     .replaceAll(">", "\\u003e")
@@ -10,132 +11,168 @@ function safeJson(value: unknown): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
-export function createHighlighterScript(file: ChangedFile | undefined): string {
-  const payload = file
-    ? {
-        ...file,
-        blocks: file.blocks.map((block) => ({
+export function createHighlighterData(review: ReviewModel): string {
+  return safeJson({
+    repositoryPath: review.repositoryPath,
+    files: review.files.map((file) => ({
+      ...file,
+      blocks: file.blocks.map((block) => ({
           ...block,
           text: normalizeVisibleText(block.source),
         })),
-      }
-    : null;
-  return `(() => {
-  "use strict";
-  const file = ${safeJson(payload)};
-  if (!file || document.getElementById("docs-review-toolbar")) return;
-  const events = new EventSource("/api/events");
-  events.addEventListener("refresh", () => window.location.reload());
-  window.addEventListener("beforeunload", () => events.close(), { once: true });
+    })),
+  });
+}
 
+export const parentHighlighterScript = `(() => {
+  "use strict";
+  const reviewDataElement = document.getElementById("review-data");
+  const preview = document.querySelector('iframe[name="docs-preview"]');
+  if (!reviewDataElement || !preview) return;
+  const reviewData = JSON.parse(reviewDataElement.textContent || "{}");
+  const files = new Map((reviewData.files || []).map((file) => [file.path, file]));
+  const toolbar = document.getElementById("preview-toolbar");
+  const previous = document.getElementById("review-previous");
+  const next = document.getElementById("review-next");
+  const status = document.getElementById("mapping-counts");
+  const openSource = document.getElementById("open-source");
+  const unmatchedPanel = document.getElementById("unmatched-panel");
+  const unmatchedList = document.getElementById("unmatched-list");
+  const deletedFallback = document.getElementById("deleted-fallback");
+  const highlightStyles = ${safeJson(reviewStyles)};
+  previous.textContent = "Previous";
+  next.textContent = "Next";
+  openSource.textContent = "Open source";
   const normalize = (value) => value
     .normalize("NFKC")
     .replace(/\\s+/g, " ")
     .trim()
     .toLocaleLowerCase();
   const tokens = (value) => normalize(value).match(/[\\p{L}\\p{N}]+/gu) || [];
-  const elements = [...document.querySelectorAll(
-    "main p, main h1, main h2, main h3, main h4, main h5, main h6, main li, main pre, main blockquote, main td, main th, article p, article h1, article h2, article h3, article h4, article h5, article h6, article li, article pre, article blockquote, article td, article th"
-  )].filter((element) => !element.closest("#docs-review-toolbar"));
-  const available = new Set(elements);
-  const matched = [];
-  const unmatched = [];
-
-  const uniqueExact = (text) => {
-    const candidates = elements.filter(
-      (element) => available.has(element) && normalize(element.textContent || "") === text
-    );
-    return candidates.length === 1 ? candidates[0] : null;
+  const sourceHref = (file, line) => {
+    const repository = String(reviewData.repositoryPath || "")
+      .replaceAll("\\\\", "/")
+      .replace(/\\/$/, "");
+    const path = String(file.path || "").replaceAll("\\\\", "/").replace(/^\\/+/, "");
+    const fullPath = repository + "/" + path;
+    return "vscode://file" + (fullPath.startsWith("/") ? "" : "/") +
+      encodeURI(fullPath) + ":" + line;
   };
-  const uniqueTokenMatch = (text) => {
-    const wanted = tokens(text);
-    if (wanted.length < 3) return null;
-    const candidates = elements.filter((element) => {
-      if (!available.has(element)) return false;
-      const actual = tokens(element.textContent || "");
-      if (actual.length < wanted.length) return false;
-      for (let start = 0; start <= actual.length - wanted.length; start++) {
-        if (wanted.every((token, offset) => token === actual[start + offset])) return true;
-      }
-      return false;
-    });
-    return candidates.length === 1 ? candidates[0] : null;
+  const mappingStatus = (link, matched, unmatched) => {
+    const indicator = link?.querySelector(".mapping-status");
+    if (!indicator) return;
+    indicator.textContent = matched + " matched · " + unmatched + " unmatched";
+    indicator.dataset.mapping = unmatched === 0 ? "matched" : matched ? "partial" : "unmatched";
   };
-
-  for (const block of file.blocks) {
-    const text = normalize(block.text);
-    const element = text && (uniqueExact(text) || uniqueTokenMatch(text));
-    if (!element) {
-      unmatched.push(block);
-      continue;
-    }
-    available.delete(element);
-    element.dataset.docsReviewMark = block.kind;
-    element.dataset.docsReviewLines = block.startLine + "-" + block.endLine;
-    matched.push({ element, block });
-  }
-
-  const toolbar = document.createElement("aside");
-  toolbar.id = "docs-review-toolbar";
-  toolbar.setAttribute("aria-label", "Documentation review controls");
-  const controls = document.createElement("div");
-  const previous = document.createElement("button");
-  previous.type = "button";
-  previous.textContent = "Previous";
-  const next = document.createElement("button");
-  next.type = "button";
-  next.textContent = "Next";
-  const status = document.createElement("div");
-  status.id = "docs-review-status";
-  const unmatchedPanel = document.createElement("div");
-  unmatchedPanel.id = "docs-review-unmatched";
-  if (unmatched.length) {
-    const details = document.createElement("details");
-    const summary = document.createElement("summary");
-    summary.textContent = "Unmatched (" + unmatched.length + ")";
-    details.append(summary);
-    for (const block of unmatched) {
-      const item = document.createElement("pre");
-      item.textContent = "Lines " + block.startLine + "-" + block.endLine + ": " + block.source;
-      details.append(item);
-    }
-    unmatchedPanel.append(details);
-  }
-  const deletedPanel = document.createElement("div");
-  deletedPanel.id = "docs-review-deleted";
-  if (file.deletedHunks.length) {
-    const details = document.createElement("details");
-    const summary = document.createElement("summary");
-    summary.textContent = "Deleted source (" + file.deletedHunks.length + ")";
-    details.append(summary);
-    for (const hunk of file.deletedHunks) {
-      const item = document.createElement("pre");
-      item.textContent = "Old lines " + hunk.oldStartLine + "-" + hunk.oldEndLine + "\\n" + hunk.source;
-      details.append(item);
-    }
-    deletedPanel.append(details);
-  }
-  controls.append(previous, next);
-  toolbar.append(controls, status, unmatchedPanel, deletedPanel);
-  document.body.append(toolbar);
-
-  let current = -1;
-  const show = (offset) => {
-    if (!matched.length) {
-      status.textContent = "0 matched; " + unmatched.length + " Unmatched";
-      previous.disabled = true;
-      next.disabled = true;
+  const resetParentUi = () => {
+    toolbar.hidden = true;
+    status.textContent = "0 matched · 0 unmatched";
+    unmatchedPanel.hidden = true;
+    unmatchedList.replaceChildren();
+    deletedFallback.replaceChildren();
+    openSource.hidden = true;
+    previous.disabled = true;
+    next.disabled = true;
+  };
+  preview.addEventListener("load", () => {
+    resetParentUi();
+    const link = document.querySelector('.review-link[aria-current="page"]');
+    const file = files.get(link?.dataset.sourceFile || "");
+    const frameDocument = preview.contentDocument;
+    if (!file || !frameDocument) {
+      mappingStatus(link, 0, file?.blocks?.length || 0);
       return;
     }
-    current = (current + offset + matched.length) % matched.length;
-    const match = matched[current];
-    status.textContent = (current + 1) + " of " + matched.length + " matched, lines " +
-      match.block.startLine + "-" + match.block.endLine +
-      (unmatched.length ? "; " + unmatched.length + " Unmatched" : "");
-    match.element.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
-  previous.addEventListener("click", () => show(-1));
-  next.addEventListener("click", () => show(1));
-  show(1);
+    const style = frameDocument.createElement("style");
+    style.dataset.docsReviewStyles = "";
+    style.textContent = highlightStyles;
+    (frameDocument.head || frameDocument.documentElement).append(style);
+    const elements = [...frameDocument.querySelectorAll(
+      "main p, main h1, main h2, main h3, main h4, main h5, main h6, main li, main pre, main blockquote, main td, main th, article p, article h1, article h2, article h3, article h4, article h5, article h6, article li, article pre, article blockquote, article td, article th"
+    )];
+    const available = new Set(elements);
+    const matched = [];
+    const unmatched = [];
+    const uniqueExact = (text) => {
+      const candidates = elements.filter(
+        (element) => available.has(element) &&
+          normalize(element.textContent || "") === text
+      );
+      return candidates.length === 1 ? candidates[0] : null;
+    };
+    const uniqueTokenMatch = (text) => {
+      const wanted = tokens(text);
+      if (wanted.length < 3) return null;
+      const candidates = elements.filter((element) => {
+        if (!available.has(element)) return false;
+        const actual = tokens(element.textContent || "");
+        if (actual.length < wanted.length) return false;
+        for (let start = 0; start <= actual.length - wanted.length; start++) {
+          if (wanted.every((token, offset) => token === actual[start + offset])) {
+            return true;
+          }
+        }
+        return false;
+      });
+      return candidates.length === 1 ? candidates[0] : null;
+    };
+    for (const block of file.blocks || []) {
+      const text = normalize(block.text || "");
+      const element = text && (uniqueExact(text) || uniqueTokenMatch(text));
+      if (!element) {
+        unmatched.push(block);
+        continue;
+      }
+      available.delete(element);
+      element.dataset.docsReviewMark = block.kind;
+      element.dataset.docsReviewLines = block.startLine + "-" + block.endLine;
+      matched.push({ element, block });
+    }
+    for (const block of unmatched) {
+      const item = document.createElement("li");
+      item.textContent = "Lines " + block.startLine + "-" + block.endLine + ": " + block.source;
+      unmatchedList.append(item);
+    }
+    unmatchedPanel.hidden = unmatched.length === 0;
+    for (const hunk of file.deletedHunks || []) {
+      const note = frameDocument.createElement("aside");
+      note.className = "deleted-inline";
+      note.textContent = "Deleted lines " + hunk.oldStartLine + "-" +
+        hunk.oldEndLine + ": " + hunk.source;
+      if (matched.length) {
+        const nearest = matched.reduce((best, candidate) =>
+          Math.abs(candidate.block.startLine - hunk.oldStartLine) <
+          Math.abs(best.block.startLine - hunk.oldStartLine) ? candidate : best
+        );
+        nearest.element.insertAdjacentElement("afterend", note);
+      } else {
+        const fallback = document.createElement("pre");
+        fallback.textContent = note.textContent;
+        deletedFallback.append(fallback);
+      }
+    }
+    toolbar.hidden = false;
+    status.textContent = matched.length + " matched · " + unmatched.length + " unmatched";
+    mappingStatus(link, matched.length, unmatched.length);
+    let current = -1;
+    const show = (offset) => {
+      if (!matched.length) return;
+      current = (current + offset + matched.length) % matched.length;
+      const match = matched[current];
+      openSource.href = sourceHref(file, match.block.startLine);
+      openSource.hidden = false;
+      match.element.scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+    previous.disabled = matched.length === 0;
+    next.disabled = matched.length === 0;
+    previous.onclick = () => show(-1);
+    next.onclick = () => show(1);
+    if (matched.length) {
+      show(1);
+    } else {
+      const line = unmatched[0]?.startLine || file.deletedHunks?.[0]?.oldStartLine || 1;
+      openSource.href = sourceHref(file, line);
+      openSource.hidden = false;
+    }
+  });
 })();`;
-}

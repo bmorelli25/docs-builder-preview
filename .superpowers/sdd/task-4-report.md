@@ -275,3 +275,52 @@ Result: exit 0.
 - Any upstream `Access-Control-Allow-Credentials` header is removed so it cannot conflict with wildcard CORS.
 - Dashboard and app API responses do not pass through the proxy header helper. `/api/review` remains non-CORS, and `/api/events` keeps its separate opaque-origin-only policy.
 - The iframe remains `sandbox="allow-scripts"` without `allow-same-origin`; no repository-file route or filesystem access was added.
+
+## Parent-only preview runtime
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/ui.test.ts test/server.test.ts
+```
+
+Result: exit 1, 10 tests failed and 16 passed. Proxied HTML still received executable highlighter code, the iframe still allowed scripts, proxy and event responses still carried CORS, snippet links did not identify their source file, and no trusted parent runtime/data or mapping UI existed.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/ui.test.ts test/server.test.ts
+```
+
+Result: exit 0, 2 test files passed and 26 tests passed.
+
+Type verification:
+
+```text
+npm run typecheck
+```
+
+Result: exit 0.
+
+### Self-review and browser QA
+
+- Proxied docs-builder HTML and assets now stream without injected style or script content. Proxy and app API responses carry no CORS headers.
+- The preview iframe is `sandbox="allow-same-origin"` with no `allow-scripts`, so stylesheets and fonts load naturally while inline and external changed-document scripts cannot execute.
+- Review data is normalized server-side and embedded in a script-safe `application/json` element in the trusted dashboard. Snippet consumer links identify the snippet path through `data-source-file`.
+- The parent runtime reads `iframe.contentDocument` after load, performs unique exact/token matching, applies green added and yellow modified highlights, and owns previous/next navigation and matched/unmatched counts.
+- Each selected sidebar link receives matched, partial, or unmatched mapping status. The trusted Open source action uses the review model's canonical repository path, selected source file, and active block line.
+- Deleted hunks are inserted after the nearest matched surviving block. Only hunks with no matched block appear in the parent toolbar fallback.
+- The app-owned EventSource remains only in the parent dashboard.
+- Browser QA loaded upstream HTML containing a malicious inline script and a same-origin stylesheet. The script did not execute, the stylesheet loaded, two blocks were highlighted, the deletion appeared inline, mapping showed `2 matched · 0 unmatched`, and Open source resolved to the canonical file and line.
+
+Full verification:
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+```
+
+Result: exit 0, 9 test files passed and 100 tests passed, TypeScript typecheck and build completed, and Git reported no whitespace errors. The first full run exposed one stale CLI assertion that expected snippet source injection into proxied HTML; the integration test now verifies that source remains in trusted dashboard data while the proxied page is unchanged.

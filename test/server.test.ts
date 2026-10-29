@@ -63,7 +63,9 @@ async function fakeUpstream(): Promise<{
     requests.push(request.url ?? "");
     if (request.url === "/guide" || request.url === "/docs/guide") {
       response.setHeader("content-type", "text/html; charset=utf-8");
-      response.end("<!doctype html><html><body><main>Guide</main></body></html>");
+      response.end(
+        '<!doctype html><html><body><main>Guide</main><script>window.__maliciousDocsScript = true</script></body></html>',
+      );
       return;
     }
     if (request.url === "/events") {
@@ -139,29 +141,26 @@ describe("startReviewServer", () => {
     expect(await api.json()).toEqual(review);
   });
 
-  it("proxies assets and injects testable highlighter assets into HTML", async () => {
+  it("proxies pages and assets without CORS or executable injection", async () => {
     const upstream = await fakeUpstream();
     const server = await start(upstream.url);
 
     const asset = await fetch(`${server.url}/_static/site.css?theme=dark`);
-    expect(asset.headers.get("access-control-allow-origin")).toBe("*");
+    expect(asset.headers.get("access-control-allow-origin")).toBeNull();
     expect(await asset.text()).toBe("body{color:navy}");
     expect(upstream.requests).toContain("/_static/site.css?theme=dark");
 
     const page = await fetch(`${server.url}/guide`);
-    expect(page.headers.get("access-control-allow-origin")).toBe("*");
+    expect(page.headers.get("access-control-allow-origin")).toBeNull();
     const html = await page.text();
     expect(html).toContain("<main>Guide</main>");
-    expect(html).toContain("data-docs-review-styles");
-    expect(html).toContain("data-docs-review-highlighter");
-    expect(html.indexOf("data-docs-review-highlighter")).toBeLessThan(
-      html.indexOf("</body>"),
-    );
-    expect(html).toContain("Unmatched");
-    expect(html).toContain("Removed sentence");
+    expect(html).toContain("window.__maliciousDocsScript = true");
+    expect(html).not.toContain("data-docs-review-styles");
+    expect(html).not.toContain("data-docs-review-highlighter");
+    expect(html).not.toContain("new EventSource");
   });
 
-  it("uses a validated snippet selector to highlight included content", async () => {
+  it("uses a validated snippet selector for the trusted parent highlighter", async () => {
     const upstream = await fakeUpstream();
     const snippetReview: ReviewModel = {
       ...review,
@@ -196,12 +195,17 @@ describe("startReviewServer", () => {
     expect(dashboard).toContain(
       'href="/docs/guide?review-source=docs%2F_snippets%2Fshared.md"',
     );
+    expect(dashboard).toContain(
+      'data-source-file="docs/_snippets/shared.md"',
+    );
 
     const page = await fetch(
       `${server.url}/docs/guide?review-source=docs%2F_snippets%2Fshared.md`,
     );
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("Changed included text.");
+    const html = await page.text();
+    expect(html).toContain("<main>Guide</main>");
+    expect(html).not.toContain("Changed included text.");
     expect(upstream.requests).toContain("/docs/guide");
   });
 
@@ -322,14 +326,14 @@ describe("startReviewServer", () => {
     expect(server.broadcast("review")).toBe(0);
   });
 
-  it("allows opaque sandbox SSE access without exposing the review API", async () => {
+  it("keeps app APIs non-CORS", async () => {
     const upstream = await fakeUpstream();
     const server = await start(upstream.url);
 
     const events = await fetch(`${server.url}/api/events`, {
       headers: { origin: "null" },
     });
-    expect(events.headers.get("access-control-allow-origin")).toBe("null");
+    expect(events.headers.get("access-control-allow-origin")).toBeNull();
     await events.body!.cancel();
 
     const api = await fetch(`${server.url}/api/review`, {

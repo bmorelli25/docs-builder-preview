@@ -150,10 +150,14 @@ describe("runCli", () => {
     expect(dashboardHtml).toContain(
       'href="/docs/page?review-source=docs%2F_snippets%2Fshared.md"',
     );
+    expect(dashboardHtml).toContain(
+      'data-source-file="docs/_snippets/shared.md"',
+    );
+    expect(dashboardHtml).toContain("First change.");
     const consumerPreview = await fetch(
       `${runtime.url}/docs/page?review-source=docs%2F_snippets%2Fshared.md`,
     ).then((response) => response.text());
-    expect(consumerPreview).toContain("First change.");
+    expect(consumerPreview).toBe("<html><body>fixture docs</body></html>");
 
     const initialReview = await fetch(`${runtime.url}/api/review`).then(
       (response) => response.json(),
