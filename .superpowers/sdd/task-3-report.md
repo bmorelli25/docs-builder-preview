@@ -214,3 +214,41 @@ Result: exit 0, 5 test files passed, 52 tests passed, TypeScript compilation com
 - Malformed or unbalanced destinations remain unchanged. Bare destinations containing whitespace are also left unchanged rather than risking a false visible-text match.
 - Reference-style links and images retain their visible label or alt text through the same scanner.
 - No new blocking concerns found. Complex destinations with titles are left unmatched conservatively, and npm still emits the pre-existing `devdir` configuration warning.
+
+## Unclosed block fix
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 1, 1 test file failed, 2 tests failed, and 13 passed. Unclosed code fences and colon directives retained the final line in their source range but omitted it from normalized visible text.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 0, 1 test file passed and 15 tests passed.
+
+Full verification:
+
+```text
+npm test && npm run build && git diff --check
+```
+
+Result: exit 0, 5 test files passed, 54 tests passed, TypeScript compilation completed successfully, and Git reported no whitespace errors.
+
+### Self-review
+
+- Fenced blocks now record whether the scan found an actual matching closing delimiter.
+- Closed code blocks and directives continue to exclude the closing delimiter from visible text.
+- Unclosed blocks use EOF as the exclusive content boundary, so every content line, including the final line, participates in normalization.
+- Source ranges remain unchanged and continue through the closing delimiter when present or EOF when absent.
+- No new blocking concerns found. The pre-existing npm `devdir` configuration warning remains.

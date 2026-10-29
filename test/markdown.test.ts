@@ -133,6 +133,44 @@ describe("segmentMarkdown", () => {
     );
   });
 
+  it("includes the final content line in an unclosed code fence", () => {
+    const source = [
+      "```ts",
+      "const first = 1;",
+      "const last = 2;",
+    ].join("\n");
+
+    expect(segmentMarkdown(source)).toEqual([
+      {
+        kind: "code",
+        startLine: 1,
+        endLine: 3,
+        source,
+        text: "const first = 1; const last = 2;",
+      },
+    ]);
+  });
+
+  it("includes the final content line in an unclosed colon directive", () => {
+    const source = [
+      ":::{note}",
+      ":class: compact",
+      "",
+      "First line.",
+      "Last *line*.",
+    ].join("\n");
+
+    expect(segmentMarkdown(source)).toEqual([
+      {
+        kind: "directive",
+        startLine: 1,
+        endLine: 5,
+        source,
+        text: "First line. Last line.",
+      },
+    ]);
+  });
+
   it("does not emit visible candidates for thematic breaks", () => {
     const source = [
       "Before.",

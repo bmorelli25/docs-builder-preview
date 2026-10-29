@@ -346,8 +346,10 @@ export function segmentMarkdown(source: string): SourceBlock[] {
       ) {
         index++;
       }
-      if (index < lines.length) index++;
+      const closed = index < lines.length;
+      if (closed) index++;
       const end = index - 1;
+      const contentEnd = closed ? end : end + 1;
       const directiveName = info.match(/^\{([^}]+)\}/)?.[1].toLowerCase();
       if (directiveName === "include" || directiveName === "literalinclude") {
         continue;
@@ -357,7 +359,7 @@ export function segmentMarkdown(source: string): SourceBlock[] {
         lines,
         start,
         end,
-        lines.slice(start + 1, Math.max(start + 1, end)).join("\n"),
+        lines.slice(start + 1, Math.max(start + 1, contentEnd)).join("\n"),
       );
       if (candidate) blocks.push(candidate);
       continue;
@@ -375,8 +377,10 @@ export function segmentMarkdown(source: string): SourceBlock[] {
       ) {
         index++;
       }
-      if (index < lines.length) index++;
+      const closed = index < lines.length;
+      if (closed) index++;
       const end = index - 1;
+      const contentEnd = closed ? end : end + 1;
       if (directiveName === "include" || directiveName === "literalinclude") {
         continue;
       }
@@ -385,7 +389,7 @@ export function segmentMarkdown(source: string): SourceBlock[] {
         lines,
         start,
         end,
-        lines.slice(start + 1, Math.max(start + 1, end)).join("\n"),
+        lines.slice(start + 1, Math.max(start + 1, contentEnd)).join("\n"),
       );
       if (candidate) blocks.push(candidate);
       continue;
