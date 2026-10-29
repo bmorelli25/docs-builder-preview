@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type {
@@ -59,11 +59,7 @@ async function pullRequestBase(
         ".baseRefName",
       ])
     ).trim();
-    if (!branch) return undefined;
-
-    const remoteRef = `origin/${branch}`;
-    if (await refExists(repositoryPath, remoteRef)) return remoteRef;
-    if (await refExists(repositoryPath, branch)) return branch;
+    return branch || undefined;
   } catch {
     // A missing gh executable or a branch without a PR is expected.
   }
@@ -73,8 +69,17 @@ async function pullRequestBase(
 async function selectBase(
   repositoryPath: string,
   baseOverride?: string,
+  fetch = true,
+  warnings: string[] = [],
 ): Promise<string> {
   if (baseOverride) {
+    if (fetch && baseOverride.startsWith("origin/")) {
+      await refreshRemoteBranch(
+        repositoryPath,
+        baseOverride.slice("origin/".length),
+        warnings,
+      );
+    }
     if (!(await refExists(repositoryPath, baseOverride))) {
       throw new Error(`Git base ref does not exist: ${baseOverride}`);
     }
@@ -82,15 +87,45 @@ async function selectBase(
   }
 
   const prBase = await pullRequestBase(repositoryPath);
-  if (prBase) return prBase;
+  if (prBase) {
+    const remoteRef = `origin/${prBase}`;
+    if (fetch) {
+      await refreshRemoteBranch(repositoryPath, prBase, warnings);
+    }
+    if (await refExists(repositoryPath, remoteRef)) return remoteRef;
+    if (await refExists(repositoryPath, prBase)) return prBase;
+  }
 
   for (const candidate of ["origin/main", "main"]) {
-    if (await refExists(repositoryPath, candidate)) return candidate;
+    if (await refExists(repositoryPath, candidate)) {
+      if (fetch && candidate === "origin/main") {
+        await refreshRemoteBranch(repositoryPath, "main", warnings);
+      }
+      return candidate;
+    }
   }
 
   throw new Error(
     "Could not select a Git base ref (tried pull request base, origin/main, and main)",
   );
+}
+
+async function refreshRemoteBranch(
+  repositoryPath: string,
+  branch: string,
+  warnings: string[],
+): Promise<void> {
+  try {
+    await git(repositoryPath, [
+      "fetch",
+      "origin",
+      `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+    ]);
+  } catch {
+    warnings.push(
+      `Could not refresh origin/${branch}; using a local reference if available`,
+    );
+  }
 }
 
 function statusFromCode(code: string): FileStatus {
@@ -211,8 +246,54 @@ function parseZeroContextDiff(output: string): ParsedDiff {
 async function untrackedDiff(
   repositoryPath: string,
   path: string,
+  isMarkdown: boolean,
 ): Promise<ParsedDiff> {
-  const source = await readFile(join(repositoryPath, path), "utf8");
+  const fullPath = join(repositoryPath, path);
+  const fileStatus = await lstat(fullPath);
+  if (fileStatus.isSymbolicLink()) {
+    throw new Error(`Untracked symlink is not supported: ${path}`);
+  }
+
+  const resolvedPath = await realpath(fullPath);
+  const relativePath = relative(repositoryPath, resolvedPath);
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  ) {
+    throw new Error(`Untracked path resolves outside the repository: ${path}`);
+  }
+
+  if (!fileStatus.isFile() || !isMarkdown) {
+    return {
+      addedLines: 0,
+      deletedLines: 0,
+      blocks: [],
+      deletedHunks: [],
+    };
+  }
+
+  const contents = await readFile(resolvedPath);
+  if (contents.includes(0)) {
+    return {
+      addedLines: 0,
+      deletedLines: 0,
+      blocks: [],
+      deletedHunks: [],
+    };
+  }
+
+  let source: string;
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(contents);
+  } catch {
+    return {
+      addedLines: 0,
+      deletedLines: 0,
+      blocks: [],
+      deletedHunks: [],
+    };
+  }
   const lines = source.endsWith("\n")
     ? source.slice(0, -1).split("\n")
     : source.split("\n");
@@ -240,30 +321,21 @@ export async function buildReview(
   baseOverride?: string,
   fetch = true,
 ): Promise<ReviewModel> {
-  await git(repositoryPath, ["rev-parse", "--show-toplevel"]);
-  const baseRef = await selectBase(repositoryPath, baseOverride);
+  const gitRoot = (
+    await git(repositoryPath, ["rev-parse", "--show-toplevel"])
+  ).trim();
   const warnings: string[] = [];
-
-  if (fetch && baseRef.startsWith("origin/")) {
-    try {
-      await git(repositoryPath, [
-        "fetch",
-        "origin",
-        baseRef.slice("origin/".length),
-      ]);
-    } catch {
-      warnings.push(`Could not refresh ${baseRef}; using the local reference`);
-    }
-  }
+  const baseRef = await selectBase(gitRoot, baseOverride, fetch, warnings);
 
   const mergeBase = (
-    await git(repositoryPath, ["merge-base", "HEAD", baseRef])
+    await git(gitRoot, ["merge-base", "HEAD", baseRef])
   ).trim();
   const tracked = parseNameStatus(
-    await git(repositoryPath, [
+    await git(gitRoot, [
       "diff",
       "--find-renames",
       "--find-copies",
+      "--find-copies-harder",
       "--name-status",
       "-z",
       mergeBase,
@@ -272,7 +344,7 @@ export async function buildReview(
   );
   const trackedPaths = new Set(tracked.map(({ path }) => path));
   const untracked: NameStatus[] = (
-    await git(repositoryPath, [
+    await git(gitRoot, [
       "ls-files",
       "--others",
       "--exclude-standard",
@@ -286,11 +358,15 @@ export async function buildReview(
   const files = await Promise.all(
     [...tracked, ...untracked].map(async (file): Promise<ChangedFile> => {
       const isUntracked = untracked.some(({ path }) => path === file.path);
+      const route = sourcePathToRoute(file.path);
       const diff = isUntracked
-        ? await untrackedDiff(repositoryPath, file.path)
+        ? await untrackedDiff(gitRoot, file.path, route !== null)
         : parseZeroContextDiff(
-            await git(repositoryPath, [
+            await git(gitRoot, [
               "diff",
+              "--find-renames",
+              "--find-copies",
+              "--find-copies-harder",
               "--unified=0",
               "--no-ext-diff",
               "--no-color",
@@ -303,7 +379,7 @@ export async function buildReview(
 
       return {
         ...file,
-        route: sourcePathToRoute(file.path),
+        route,
         ...diff,
       };
     }),
@@ -311,7 +387,7 @@ export async function buildReview(
   files.sort((left, right) => left.path.localeCompare(right.path));
 
   return {
-    repositoryPath,
+    repositoryPath: gitRoot,
     baseRef,
     mergeBase,
     files,

@@ -1,10 +1,18 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildReview } from "../src/git.js";
 
@@ -12,6 +20,7 @@ const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(
     temporaryDirectories.splice(0).map((path) =>
       rm(path, { recursive: true, force: true }),
@@ -185,5 +194,143 @@ describe("buildReview", () => {
     await expect(
       readFile(join(repositoryPath, "with"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("uses the canonical Git root when invoked from a nested directory", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/new.md", "from root\n");
+    const nestedPath = join(repositoryPath, "packages", "tool");
+    await mkdir(nestedPath, { recursive: true });
+
+    const review = await buildReview(nestedPath, "main", false);
+    const canonicalRoot = (
+      await git(nestedPath, "rev-parse", "--show-toplevel")
+    ).stdout.trim();
+
+    expect(review.repositoryPath).toBe(canonicalRoot);
+    expect(review.files).toMatchObject([
+      {
+        path: "docs/new.md",
+        blocks: [{ source: "from root" }],
+      },
+    ]);
+  });
+
+  it("rejects untracked symlinks before reading their targets", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    const outsidePath = join(dirname(repositoryPath), "outside.md");
+    await writeFile(outsidePath, "must not be read\n");
+    await mkdir(join(repositoryPath, "docs"));
+    await symlink(outsidePath, join(repositoryPath, "docs", "linked.md"));
+
+    await expect(
+      buildReview(repositoryPath, "main", false),
+    ).rejects.toThrow("Untracked symlink is not supported: docs/linked.md");
+  });
+
+  it("does not parse untracked supporting or binary files as Markdown blocks", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/navigation.yml", "toc: invalid\n");
+    await writeFile(
+      join(repositoryPath, "docs", "binary.md"),
+      Buffer.from([0x00, 0xff, 0x01]),
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(
+      review.files
+        .filter(({ path }) =>
+          ["docs/binary.md", "docs/navigation.yml"].includes(path),
+        )
+        .map(({ path, addedLines, blocks }) => ({
+          path,
+          addedLines,
+          blocks,
+        })),
+    ).toEqual([
+      { path: "docs/binary.md", addedLines: 0, blocks: [] },
+      { path: "docs/navigation.yml", addedLines: 0, blocks: [] },
+    ]);
+  });
+
+  it("fetches and honors a GitHub pull request base that is absent locally", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+
+    const remotePath = join(dirname(repositoryPath), "remote.git");
+    await mkdir(remotePath);
+    await git(remotePath, "init", "--bare");
+    await git(repositoryPath, "remote", "add", "origin", remotePath);
+    await git(repositoryPath, "switch", "-c", "release");
+    await write(repositoryPath, "release.md", "release\n");
+    await commitAll(repositoryPath, "release");
+    await git(repositoryPath, "push", "origin", "release");
+    await git(repositoryPath, "switch", "main");
+    await git(repositoryPath, "branch", "-D", "release");
+    await git(
+      repositoryPath,
+      "update-ref",
+      "-d",
+      "refs/remotes/origin/release",
+    );
+    await git(repositoryPath, "switch", "-c", "feature");
+
+    const binPath = join(dirname(repositoryPath), "bin");
+    await mkdir(binPath);
+    const ghPath = join(binPath, "gh");
+    await writeFile(ghPath, "#!/bin/sh\nprintf 'release\\n'\n");
+    await chmod(ghPath, 0o755);
+    vi.stubEnv("PATH", `${binPath}:${process.env.PATH}`);
+
+    const review = await buildReview(repositoryPath);
+
+    expect(review.baseRef).toBe("origin/release");
+    expect(
+      (
+        await git(
+          repositoryPath,
+          "rev-parse",
+          "--verify",
+          "refs/remotes/origin/release",
+        )
+      ).stdout.trim(),
+    ).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("detects copies from unchanged source files", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/source.md",
+      "A sufficiently distinctive paragraph for copy detection.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/copied.md",
+      "A sufficiently distinctive paragraph for copy detection.\n",
+    );
+    await git(repositoryPath, "add", "docs/copied.md");
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(
+      review.files.find(({ path }) => path === "docs/copied.md"),
+    ).toMatchObject({
+      status: "copied",
+      previousPath: "docs/source.md",
+    });
   });
 });
