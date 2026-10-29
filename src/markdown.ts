@@ -402,6 +402,28 @@ export function segmentMarkdown(source: string): SourceBlock[] {
       continue;
     }
 
+    const item = lines[index].match(listItem);
+    if (item) {
+      const start = index;
+      const indentation = item[1].length;
+      index++;
+      while (index < lines.length && lines[index].trim()) {
+        const nextItem = lines[index].match(listItem);
+        if (nextItem && nextItem[1].length <= indentation) break;
+        if (
+          isSetextUnderline(lines[index]) &&
+          !/^\s+/.test(lines[index])
+        ) {
+          break;
+        }
+        if (startsBlock(lines[index]) && !/^\s+/.test(lines[index])) break;
+        index++;
+      }
+      const candidate = block("list-item", lines, start, index - 1);
+      if (candidate) blocks.push(candidate);
+      continue;
+    }
+
     const setextUnderline = findSetextUnderline(lines, index);
     if (setextUnderline !== undefined) {
       const candidate = block(
@@ -413,22 +435,6 @@ export function segmentMarkdown(source: string): SourceBlock[] {
       );
       if (candidate) blocks.push(candidate);
       index = setextUnderline + 1;
-      continue;
-    }
-
-    const item = lines[index].match(listItem);
-    if (item) {
-      const start = index;
-      const indentation = item[1].length;
-      index++;
-      while (index < lines.length && lines[index].trim()) {
-        const nextItem = lines[index].match(listItem);
-        if (nextItem && nextItem[1].length <= indentation) break;
-        if (startsBlock(lines[index]) && !/^\s+/.test(lines[index])) break;
-        index++;
-      }
-      const candidate = block("list-item", lines, start, index - 1);
-      if (candidate) blocks.push(candidate);
       continue;
     }
 

@@ -218,6 +218,51 @@ describe("segmentMarkdown", () => {
     ]);
   });
 
+  it("does not reinterpret list items as Setext heading content", () => {
+    const source = [
+      "- First item",
+      "---",
+      "",
+      "- Second item",
+      "===",
+      "",
+      "Ordinary multiline",
+      "heading content",
+      "---",
+    ].join("\n");
+
+    expect(segmentMarkdown(source)).toEqual([
+      {
+        kind: "list-item",
+        startLine: 1,
+        endLine: 1,
+        source: "- First item",
+        text: "First item",
+      },
+      {
+        kind: "list-item",
+        startLine: 4,
+        endLine: 4,
+        source: "- Second item",
+        text: "Second item",
+      },
+      {
+        kind: "paragraph",
+        startLine: 5,
+        endLine: 5,
+        source: "===",
+        text: "===",
+      },
+      {
+        kind: "heading",
+        startLine: 7,
+        endLine: 9,
+        source: "Ordinary multiline\nheading content\n---",
+        text: "Ordinary multiline heading content",
+      },
+    ]);
+  });
+
   it("removes only valid optional ATX closing hash sequences", () => {
     const source = [
       "# Release notes ###",

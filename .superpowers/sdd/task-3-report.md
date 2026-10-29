@@ -252,3 +252,41 @@ Result: exit 0, 5 test files passed, 54 tests passed, TypeScript compilation com
 - Unclosed blocks use EOF as the exclusive content boundary, so every content line, including the final line, participates in normalization.
 - Source ranges remain unchanged and continue through the closing delimiter when present or EOF when absent.
 - No new blocking concerns found. The pre-existing npm `devdir` configuration warning remains.
+
+## List and Setext precedence fix
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 1, 1 test file failed, 1 test failed, and 15 passed. List-item lines followed by `---` or `===` were emitted as Setext headings instead of list items.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 0, 1 test file passed and 16 tests passed.
+
+Full verification:
+
+```text
+npm test && npm run build && git diff --check
+```
+
+Result: exit 0, 5 test files passed, 55 tests passed, TypeScript compilation completed successfully, and Git reported no whitespace errors.
+
+### Self-review
+
+- List-item recognition now runs before Setext heading recognition, preventing list source from becoming heading content.
+- An unindented Setext-style underline terminates the list item. A following `---` is then processed as a thematic break, while `===` remains a separate conservative paragraph candidate.
+- Indented continuation lines remain part of their list item.
+- Ordinary multiline paragraph content followed by a Setext underline still produces one heading block with the complete source range.
+- No new blocking concerns found. The pre-existing npm `devdir` configuration warning remains.
