@@ -275,3 +275,58 @@ git diff --check: exit 0
 ```
 
 The real docs-content smoke test was not rerun in this subtask.
+
+## Fatal runtime watcher follow-up
+
+Status: DONE
+
+### Red evidence
+
+The runtime-failure tests were changed before production behavior:
+
+```text
+npm test -- test/cli.test.ts
+
+Test Files  1 failed (1)
+Tests  2 failed | 4 passed (6)
+```
+
+The CLI timed out waiting for fatal handling because a native watcher `error`
+event only printed a warning. The focused watcher test also proved that the
+fatal callback was never invoked.
+
+### Fix
+
+- A native watcher runtime error is now reported once and dispatched to a
+  fatal handler. Repeated error events cannot start overlapping shutdowns.
+- `runCli` handles the fatal event by setting exit status 1 and calling its
+  existing cleanup coordinator. That coordinator independently closes the
+  watcher, review server, and owned docs-builder.
+- Signal listeners are removed by the same `stop()` path used for normal
+  shutdown.
+- Tests can inject `setExitCode` and `onFatal` callbacks, avoiding mutation of
+  the Vitest process while still verifying executable behavior.
+- Fatal callback failures are caught and reported through the warning channel;
+  they cannot become unhandled promise rejections.
+
+### Regression coverage
+
+- A post-startup native watcher error is printed to stderr.
+- Fatal handling requests exit code 1.
+- The watcher and review server close before the injected fatal callback
+  resolves.
+- A reused docs-builder remains running.
+- Process signal listeners return to their original counts.
+- A rejecting fatal callback is reported without an unhandled rejection.
+
+### Green evidence
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  86 passed (86)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```

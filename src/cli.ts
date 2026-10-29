@@ -23,6 +23,8 @@ export interface CliRuntime {
 
 export interface CliDependencies {
   watchFactory?: RecursiveWatchFactory;
+  onFatal?: (error: unknown) => void | Promise<void>;
+  setExitCode?: (code: number) => void;
 }
 
 interface CleanupCoordinator {
@@ -150,10 +152,12 @@ export async function watchRepository(
   repositoryPath: string,
   rebuild: () => Promise<void>,
   warn: (message: string) => void,
-  watchFactory: RecursiveWatchFactory = defaultWatchFactory,
+  watchFactory: RecursiveWatchFactory | undefined,
+  onFatal: (error: Error) => void | Promise<void>,
 ): Promise<RepositoryWatcher> {
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
+  let fatalTriggered = false;
   let rebuildQueue = Promise.resolve();
 
   const enqueueRebuild = () => {
@@ -171,7 +175,7 @@ export async function watchRepository(
     });
   };
 
-  const watcher = watchFactory(
+  const watcher = (watchFactory ?? defaultWatchFactory)(
     repositoryPath,
     { recursive: true },
     (_eventType, filename) => {
@@ -194,6 +198,17 @@ export async function watchRepository(
         error instanceof Error ? error.message : String(error)
       }`,
     );
+    if (fatalTriggered) return;
+    fatalTriggered = true;
+    void Promise.resolve()
+      .then(() => onFatal(error))
+      .catch((fatalError) => {
+        warn(
+          `Fatal watcher cleanup failed: ${
+            fatalError instanceof Error ? fatalError.message : String(fatalError)
+          }`,
+        );
+      });
   });
   await new Promise<void>((resolveReady) => setImmediate(resolveReady));
   starting = false;
@@ -236,6 +251,11 @@ export async function runCli(
 ): Promise<CliRuntime> {
   const info = (message: string) => process.stdout.write(`${message}\n`);
   const warn = (message: string) => process.stderr.write(`${message}\n`);
+  const setExitCode =
+    dependencies.setExitCode ??
+    ((code: number) => {
+      process.exitCode = code;
+    });
   const initialReview = await buildReviewWithConsumers(options);
   const docsBuilder = await ensureDocsBuilder({
     repositoryPath: initialReview.repositoryPath,
@@ -295,6 +315,26 @@ export async function runCli(
       },
       warn,
       dependencies.watchFactory,
+      async (error) => {
+        setExitCode(1);
+        let fatalError: unknown = error;
+        try {
+          await stop();
+        } catch (cleanupError) {
+          fatalError = new AggregateError(
+            [error, cleanupError],
+            "Runtime watcher failed and cleanup was incomplete",
+          );
+          warn(
+            `Runtime watcher cleanup failed: ${
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : String(cleanupError)
+            }`,
+          );
+        }
+        await dependencies.onFatal?.(fatalError);
+      },
     );
     cleanup.register("watcher", watcher.close);
     if (shutdownRequested) {

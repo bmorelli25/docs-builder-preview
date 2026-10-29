@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createCleanupCoordinator,
@@ -32,6 +32,7 @@ const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.stop()));
   await Promise.all(
     servers.splice(0).map(
@@ -268,6 +269,72 @@ describe("runCli", () => {
       200,
     );
   });
+
+  it("treats runtime watcher errors as fatal and cleans up runtime resources", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const docsPort = await listen(
+      createServer((_request, response) => response.end("ready")),
+    );
+    const port = await unusedPort();
+    const nativeWatcher = new FakeRecursiveWatcher();
+    const watchFactory: RecursiveWatchFactory = () => nativeWatcher;
+    const exitCodes: number[] = [];
+    const fatalErrors: unknown[] = [];
+    let resolveFatal: (() => void) | undefined;
+    const fatalHandled = new Promise<void>((resolve) => {
+      resolveFatal = resolve;
+    });
+    const signalListeners = {
+      SIGINT: process.listenerCount("SIGINT"),
+      SIGTERM: process.listenerCount("SIGTERM"),
+    };
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+
+    await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        docsPort,
+        port,
+        fetch: false,
+        open: false,
+      },
+      {
+        watchFactory,
+        setExitCode: (code) => exitCodes.push(code),
+        onFatal: (error) => {
+          fatalErrors.push(error);
+          resolveFatal!();
+        },
+      },
+    );
+
+    nativeWatcher.emit("error", new Error("native watch failed"));
+    await Promise.race([
+      fatalHandled,
+      delay(1_000).then(() => {
+        throw new Error("fatal watcher handling timed out");
+      }),
+    ]);
+
+    expect(fatalErrors).toEqual([
+      expect.objectContaining({ message: "native watch failed" }),
+    ]);
+    expect(stderr).toHaveBeenCalledWith(
+      "File watcher error: native watch failed\n",
+    );
+    expect(exitCodes).toEqual([1]);
+    expect(nativeWatcher.closeCalls).toBe(1);
+    await expect(fetch(`http://127.0.0.1:${port}`)).rejects.toThrow();
+    expect(process.listenerCount("SIGINT")).toBe(signalListeners.SIGINT);
+    expect(process.listenerCount("SIGTERM")).toBe(signalListeners.SIGTERM);
+    expect(await fetch(`http://127.0.0.1:${docsPort}`)).toHaveProperty(
+      "status",
+      200,
+    );
+  });
 });
 
 describe("watchRepository", () => {
@@ -290,6 +357,7 @@ describe("watchRepository", () => {
       releaseFirst = resolve;
     });
     const warnings: string[] = [];
+    const fatalErrors: Error[] = [];
     const watcher = await watchRepository(
       "/large/repository",
       async () => {
@@ -301,6 +369,10 @@ describe("watchRepository", () => {
       },
       (warning) => warnings.push(warning),
       watchFactory,
+      async (error) => {
+        fatalErrors.push(error);
+        throw new Error("fatal callback failed");
+      },
     );
 
     expect(calls).toEqual([
@@ -326,7 +398,14 @@ describe("watchRepository", () => {
     expect(rebuilds).toBe(2);
     expect(maxActive).toBe(1);
     nativeWatcher.emit("error", new Error("watch stream failed"));
-    expect(warnings).toEqual(["File watcher error: watch stream failed"]);
+    await delay(0);
+    expect(warnings).toEqual([
+      "File watcher error: watch stream failed",
+      "Fatal watcher cleanup failed: fatal callback failed",
+    ]);
+    expect(fatalErrors).toEqual([
+      expect.objectContaining({ message: "watch stream failed" }),
+    ]);
 
     await watcher.close();
     expect(nativeWatcher.closeCalls).toBe(1);
