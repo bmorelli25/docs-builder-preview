@@ -320,6 +320,23 @@ describe("startReviewServer", () => {
     expect(server.broadcast("review")).toBe(0);
   });
 
+  it("allows opaque sandbox SSE access without exposing the review API", async () => {
+    const upstream = await fakeUpstream();
+    const server = await start(upstream.url);
+
+    const events = await fetch(`${server.url}/api/events`, {
+      headers: { origin: "null" },
+    });
+    expect(events.headers.get("access-control-allow-origin")).toBe("null");
+    await events.body!.cancel();
+
+    const api = await fetch(`${server.url}/api/review`, {
+      headers: { origin: "null" },
+    });
+    expect(api.status).toBe(200);
+    expect(api.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
   it("closes promptly with an active SSE connection", async () => {
     const upstream = await fakeUpstream();
     const server = await start(upstream.url);

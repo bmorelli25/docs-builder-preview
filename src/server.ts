@@ -251,13 +251,18 @@ export async function startReviewServer(
       return;
     }
     if (target.pathname === "/api/events") {
-      response.writeHead(200, {
+      const headers: import("node:http").OutgoingHttpHeaders = {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",
         connection: "keep-alive",
         "x-accel-buffering": "no",
         "x-content-type-options": "nosniff",
-      });
+      };
+      if (request.headers.origin === "null") {
+        headers["access-control-allow-origin"] = "null";
+        headers.vary = "Origin";
+      }
+      response.writeHead(200, headers);
       if (request.method === "HEAD") {
         response.end();
         return;

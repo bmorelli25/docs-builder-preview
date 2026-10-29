@@ -199,3 +199,42 @@ Result: exit 0.
 - File paths, previous paths, base refs, warnings, routes, search attributes, and accessible labels are HTML-escaped.
 - The dashboard keeps its app-owned SSE refresh subscription.
 - Browser QA confirmed the empty preview state, iframe navigation, selected/current state, desktop shell, scrollable narrow sidebar, and stacked 600-pixel responsive layout.
+
+## Dashboard persistence and isolation fixes
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/ui.test.ts test/server.test.ts
+```
+
+Result: exit 1, 5 tests failed and 20 passed. The iframe lacked a sandbox, dashboard state was not stored or restored, selector-specific snippet URLs inflated the page count, refresh reloaded without first persisting state, and sandbox-origin SSE responses lacked CORS.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/ui.test.ts test/server.test.ts
+```
+
+Result: exit 0, 2 test files passed and 25 tests passed.
+
+Type verification:
+
+```text
+npm run typecheck
+```
+
+Result: exit 0.
+
+### Self-review
+
+- Dashboard state uses `sessionStorage` and includes the active href, search value, status value, and sidebar scroll position. Storage failures degrade to the empty/default UI.
+- The SSE refresh listener persists state before reloading the dashboard. On startup, filters and scroll position are restored, and the iframe receives a fresh navigation to the saved href so its changed content reloads.
+- Active state is restored only by exact href match against the new dashboard links. A removed or changed href leaves the iframe without `src` and displays the empty state.
+- The preview iframe uses `sandbox="allow-scripts"` without `allow-same-origin`. Injected highlighting and EventSource code can run, but changed documentation executes with an opaque origin and cannot access the parent dashboard or same-origin APIs.
+- `/api/events` returns `Access-Control-Allow-Origin: null` only when the request origin is the opaque sandbox origin. `/api/review` has no CORS header.
+- Preview counts use unique route pathnames. Multiple changed snippets rendered through one consumer page count as one preview page even though their selector URLs differ.

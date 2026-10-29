@@ -155,6 +155,8 @@ describe("generated browser assets", () => {
     expect(dashboard).toContain(
       '<iframe name="docs-preview" title="Documentation preview"',
     );
+    expect(dashboard).toContain('sandbox="allow-scripts"');
+    expect(dashboard).not.toContain("allow-same-origin");
     expect(dashboard).toContain('target="docs-preview"');
     expect(dashboard).toContain('class="preview-empty"');
     expect(dashboard).toContain("Select a page to preview");
@@ -162,6 +164,58 @@ describe("generated browser assets", () => {
     expect(dashboard).toContain("applyFilters");
     expect(dashboard).toContain("item.hidden");
     expect(dashboard).toContain("group.hidden");
+  });
+
+  it("persists and safely restores dashboard state across refreshes", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [
+        {
+          ...rootFile,
+          path: "docs/guide.md",
+          route: "/docs/guide",
+        },
+      ],
+      warnings: [],
+    };
+
+    const dashboard = createDashboard(review);
+    expect(dashboard).toContain('sessionStorage.setItem("docs-review-state"');
+    expect(dashboard).toContain('sessionStorage.getItem("docs-review-state")');
+    expect(dashboard).toContain("activeHref");
+    expect(dashboard).toContain("search:");
+    expect(dashboard).toContain("status:");
+    expect(dashboard).toContain("scrollTop:");
+    expect(dashboard).toContain(
+      'link.getAttribute("href") === state.activeHref',
+    );
+    expect(dashboard).toContain('preview.setAttribute("src", state.activeHref)');
+    expect(dashboard).toContain("previewEmpty.hidden = false");
+  });
+
+  it("counts unique preview pathnames across snippet selectors", () => {
+    const snippet = (path: string): ChangedFile => ({
+      ...rootFile,
+      path,
+      route: null,
+      consumers: ["docs/guide.md"],
+    });
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [
+        snippet("docs/_snippets/one.md"),
+        snippet("docs/_snippets/two.md"),
+      ],
+      warnings: [],
+    };
+
+    expect(createDashboard(review)).toContain(
+      "<strong>1</strong> preview pages",
+    );
   });
 
   it("escapes dashboard metadata, warnings, and file labels", () => {
@@ -205,6 +259,7 @@ describe("generated browser assets", () => {
     expect(script).toBeDefined();
     let refresh: (() => void) | undefined;
     let reloads = 0;
+    let persisted = 0;
     class EventSourceStub {
       constructor(url: string) {
         expect(url).toBe("/api/events");
@@ -216,6 +271,7 @@ describe("generated browser assets", () => {
     }
     const windowStub = {
       location: { reload: () => reloads++ },
+      persistReviewState: () => persisted++,
       addEventListener() {},
     };
 
@@ -224,6 +280,7 @@ describe("generated browser assets", () => {
       windowStub,
     );
     refresh?.();
+    expect(persisted).toBe(1);
     expect(reloads).toBe(1);
   });
 

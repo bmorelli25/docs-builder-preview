@@ -111,15 +111,11 @@ export function createDashboard(review: ReviewModel): string {
   const supporting = review.files.filter(
     (file) => !file.route && (file.consumers?.length ?? 0) === 0,
   );
-  const previewUrls = new Set(previewable.map((file) => previewHref(file.route!)));
+  const previewPathnames = new Set(previewable.map((file) => file.route!));
   for (const file of snippets) {
     for (const consumer of file.consumers ?? []) {
       const route = sourcePathToRoute(consumer);
-      if (route) {
-        previewUrls.add(
-          `${route}?review-source=${encodeURIComponent(file.path)}`,
-        );
-      }
+      if (route) previewPathnames.add(route);
     }
   }
   const groups = [
@@ -390,7 +386,7 @@ export function createDashboard(review: ReviewModel): string {
       </div>
       <div class="metrics" aria-label="Review summary">
         <span class="metric"><strong>${review.files.length}</strong> changed files</span>
-        <span class="metric"><strong>${previewUrls.size}</strong> preview pages</span>
+        <span class="metric"><strong>${previewPathnames.size}</strong> preview pages</span>
       </div>
     </header>
     <main class="workspace">
@@ -420,7 +416,7 @@ export function createDashboard(review: ReviewModel): string {
         </nav>
       </aside>
       <section class="preview-pane" aria-label="Page preview">
-        <iframe name="docs-preview" title="Documentation preview"></iframe>
+        <iframe name="docs-preview" title="Documentation preview" sandbox="allow-scripts"></iframe>
         <div class="preview-empty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-1.5Z"/><path d="M4 17h14M8 7h6M8 11h7"/></svg>
           <strong>Select a page to preview</strong>
@@ -431,7 +427,10 @@ export function createDashboard(review: ReviewModel): string {
   </div>
   <script>
     const reviewEvents = new EventSource("/api/events");
-    reviewEvents.addEventListener("refresh", () => window.location.reload());
+    reviewEvents.addEventListener("refresh", () => {
+      window.persistReviewState?.();
+      window.location.reload();
+    });
     window.addEventListener("pagehide", () => reviewEvents.close(), { once: true });
   </script>
   <script>
@@ -441,7 +440,10 @@ export function createDashboard(review: ReviewModel): string {
     const groups = [...document.querySelectorAll("[data-review-group]")];
     const filterEmpty = document.getElementById("filter-empty");
     const previewEmpty = document.querySelector(".preview-empty");
+    const preview = document.querySelector('iframe[name="docs-preview"]');
+    const fileList = document.querySelector(".file-list");
     const previewLinks = [...document.querySelectorAll(".review-link")];
+    let activeHref = null;
     const applyFilters = () => {
       const query = search.value.trim().toLocaleLowerCase();
       const status = statusFilter.value;
@@ -458,18 +460,80 @@ export function createDashboard(review: ReviewModel): string {
       }
       filterEmpty.hidden = visible !== 0 || items.length === 0;
     };
-    search.addEventListener("input", applyFilters);
-    statusFilter.addEventListener("change", applyFilters);
-    for (const link of previewLinks) {
-      link.addEventListener("click", () => {
-        for (const candidate of previewLinks) {
-          candidate.classList.remove("selected");
-          candidate.removeAttribute("aria-current");
-        }
+    const activateLink = (link, navigate) => {
+      for (const candidate of previewLinks) {
+        candidate.classList.remove("selected");
+        candidate.removeAttribute("aria-current");
+      }
+      if (link) {
+        activeHref = link.getAttribute("href");
         link.classList.add("selected");
         link.setAttribute("aria-current", "page");
         previewEmpty.hidden = true;
+        if (navigate) preview.setAttribute("src", activeHref);
+      } else {
+        activeHref = null;
+        preview.removeAttribute("src");
+        previewEmpty.hidden = false;
+      }
+    };
+    const persistState = () => {
+      try {
+        sessionStorage.setItem("docs-review-state", JSON.stringify({
+          activeHref,
+          search: search.value,
+          status: statusFilter.value,
+          scrollTop: fileList.scrollTop,
+        }));
+      } catch {
+        // Storage can be disabled without breaking the review UI.
+      }
+    };
+    window.persistReviewState = persistState;
+    search.addEventListener("input", () => {
+      applyFilters();
+      persistState();
+    });
+    statusFilter.addEventListener("change", () => {
+      applyFilters();
+      persistState();
+    });
+    fileList.addEventListener("scroll", persistState, { passive: true });
+    window.addEventListener("pagehide", persistState, { once: true });
+    for (const link of previewLinks) {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        activateLink(link, true);
+        persistState();
       });
+    }
+    let state;
+    try {
+      state = JSON.parse(sessionStorage.getItem("docs-review-state") ?? "null");
+    } catch {
+      state = null;
+    }
+    if (state && typeof state === "object") {
+      if (typeof state.search === "string") search.value = state.search;
+      if (
+        typeof state.status === "string" &&
+        [...statusFilter.options].some((option) => option.value === state.status)
+      ) {
+        statusFilter.value = state.status;
+      }
+      applyFilters();
+      if (Number.isFinite(state.scrollTop)) fileList.scrollTop = state.scrollTop;
+      const activeLink = typeof state.activeHref === "string"
+        ? previewLinks.find(
+            (link) => link.getAttribute("href") === state.activeHref,
+          )
+        : undefined;
+      if (activeLink) {
+        activateLink(activeLink, false);
+        preview.setAttribute("src", state.activeHref);
+      } else {
+        activateLink(null, false);
+      }
     }
   </script>
 </body>
