@@ -137,14 +137,19 @@ export function normalizeVisibleText(source: string): string {
         !/^\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)*\s*\|?$/.test(trimmed)
       );
     })
-    .map((line) =>
-      line
-        .replace(/^\s{0,3}#{1,6}(?:\s+|$)/, "")
+    .map((line) => {
+      const atxHeading = line.match(/^\s{0,3}#{1,6}(?:[ \t]+|$)/);
+      const visibleLine = atxHeading
+        ? line
+            .slice(atxHeading[0].length)
+            .replace(/(?:[ \t]+#+[ \t]*|^#+[ \t]*)$/, "")
+        : line;
+      return visibleLine
         .replace(/^\s*>\s?/, "")
         .replace(listItem, "")
         .replace(/^\s*\|?|\|?\s*$/g, "")
-        .replace(/\s*\|\s*/g, " "),
-    )
+        .replace(/\s*\|\s*/g, " ");
+    })
     .join(" ");
 
   const normalized = decodeEntities(visibleLines)

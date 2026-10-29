@@ -179,6 +179,28 @@ describe("segmentMarkdown", () => {
       },
     ]);
   });
+
+  it("removes only valid optional ATX closing hash sequences", () => {
+    const source = [
+      "# Release notes ###",
+      "",
+      "## C# reference",
+      "",
+      "### Hashes ### remain literal",
+      "",
+      "#### Use `# literal` ####   ",
+      "",
+      "##### Keep an escaped \\###",
+    ].join("\n");
+
+    expect(segmentMarkdown(source).map(({ text }) => text)).toEqual([
+      "Release notes",
+      "C# reference",
+      "Hashes ### remain literal",
+      "Use # literal",
+      "Keep an escaped ###",
+    ]);
+  });
 });
 
 describe("normalizeVisibleText", () => {

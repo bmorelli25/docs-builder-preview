@@ -138,3 +138,40 @@ Result: exit 0, 5 test files passed, 49 tests passed, TypeScript compilation com
 - Setext detection scans contiguous paragraph content for its underline, then emits one heading with the full source range and all content lines as visible text.
 - A hyphen underline after paragraph content remains a Setext heading, while standalone thematic breaks remain excluded.
 - No new blocking concerns found. The normalizer remains intentionally conservative for complex Markdown, and npm still emits the pre-existing `devdir` configuration warning.
+
+## ATX heading fix
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 1, 1 test file failed, 1 test failed, and 11 passed. Valid whitespace-delimited closing hash sequences remained in normalized ATX heading text.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts
+```
+
+Result: exit 0, 1 test file passed and 12 tests passed.
+
+Full verification:
+
+```text
+npm test && npm run build && git diff --check
+```
+
+Result: exit 0, 5 test files passed, 50 tests passed, TypeScript compilation completed successfully, and Git reported no whitespace errors.
+
+### Self-review
+
+- ATX opening syntax is identified before line normalization. A trailing hash sequence is removed only from an ATX heading and only when it is separated from heading content by whitespace.
+- Hashes embedded in words, followed by more heading text, escaped with a backslash, or protected inside inline code remain visible.
+- Trailing spaces after a valid closing sequence are removed with that sequence.
+- No new blocking concerns found. The pre-existing npm `devdir` configuration warning remains.
