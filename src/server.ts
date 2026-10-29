@@ -108,6 +108,17 @@ function forwardedHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
   return result;
 }
 
+function proxiedResponseHeaders(
+  headers: IncomingHttpHeaders,
+): IncomingHttpHeaders {
+  const result = {
+    ...headers,
+    "access-control-allow-origin": "*",
+  };
+  delete result["access-control-allow-credentials"];
+  return result;
+}
+
 function injectAssets(html: string, file: ChangedFile | undefined): string {
   const style = `<style data-docs-review-styles>${reviewStyles}</style>`;
   const script = `<script data-docs-review-highlighter>${createHighlighterScript(file)}</script>`;
@@ -142,7 +153,7 @@ async function proxyRequest(
         if (!isHtml) {
           response.writeHead(
             upstreamResponse.statusCode ?? 502,
-            upstreamResponse.headers,
+            proxiedResponseHeaders(upstreamResponse.headers),
           );
           upstreamResponse.pipe(response);
           upstreamResponse.once("end", resolve);
@@ -158,7 +169,7 @@ async function proxyRequest(
         });
         upstreamResponse.once("end", () => {
           const body = injectAssets(Buffer.concat(chunks).toString("utf8"), file);
-          const headers = { ...upstreamResponse.headers };
+          const headers = proxiedResponseHeaders(upstreamResponse.headers);
           delete headers["content-length"];
           delete headers["content-encoding"];
           delete headers["content-security-policy"];

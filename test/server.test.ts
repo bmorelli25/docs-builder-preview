@@ -144,10 +144,12 @@ describe("startReviewServer", () => {
     const server = await start(upstream.url);
 
     const asset = await fetch(`${server.url}/_static/site.css?theme=dark`);
+    expect(asset.headers.get("access-control-allow-origin")).toBe("*");
     expect(await asset.text()).toBe("body{color:navy}");
     expect(upstream.requests).toContain("/_static/site.css?theme=dark");
 
     const page = await fetch(`${server.url}/guide`);
+    expect(page.headers.get("access-control-allow-origin")).toBe("*");
     const html = await page.text();
     expect(html).toContain("<main>Guide</main>");
     expect(html).toContain("data-docs-review-styles");

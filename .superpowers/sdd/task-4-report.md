@@ -238,3 +238,40 @@ Result: exit 0.
 - The preview iframe uses `sandbox="allow-scripts"` without `allow-same-origin`. Injected highlighting and EventSource code can run, but changed documentation executes with an opaque origin and cannot access the parent dashboard or same-origin APIs.
 - `/api/events` returns `Access-Control-Allow-Origin: null` only when the request origin is the opaque sandbox origin. `/api/review` has no CORS header.
 - Preview counts use unique route pathnames. Multiple changed snippets rendered through one consumer page count as one preview page even though their selector URLs differ.
+
+## Sandboxed preview asset CORS fix
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/server.test.ts
+```
+
+Result: exit 1, 1 test failed and 12 passed. Proxied static assets and rendered pages had no CORS header, so stylesheets and fonts requested by an opaque-origin sandbox could be blocked.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/server.test.ts
+```
+
+Result: exit 0, 1 test file passed and 13 tests passed.
+
+Type verification:
+
+```text
+npm run typecheck
+```
+
+Result: exit 0.
+
+### Self-review
+
+- Every response returned by the fixed localhost docs-builder proxy, including injected HTML and streamed static assets, now receives `Access-Control-Allow-Origin: *`.
+- Any upstream `Access-Control-Allow-Credentials` header is removed so it cannot conflict with wildcard CORS.
+- Dashboard and app API responses do not pass through the proxy header helper. `/api/review` remains non-CORS, and `/api/events` keeps its separate opaque-origin-only policy.
+- The iframe remains `sandbox="allow-scripts"` without `allow-same-origin`; no repository-file route or filesystem access was added.
