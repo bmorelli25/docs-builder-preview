@@ -287,6 +287,96 @@ describe("buildReview", () => {
     });
   });
 
+  it("fetches origin/main before requiring a local remote-tracking ref", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+
+    const remotePath = join(dirname(repositoryPath), "remote.git");
+    await mkdir(remotePath);
+    await git(remotePath, "init", "--bare");
+    await git(repositoryPath, "remote", "add", "origin", remotePath);
+    await git(repositoryPath, "push", "origin", "main");
+    await git(
+      repositoryPath,
+      "update-ref",
+      "-d",
+      "refs/remotes/origin/main",
+    );
+    await git(repositoryPath, "switch", "-c", "feature");
+
+    const binPath = join(dirname(repositoryPath), "bin");
+    await mkdir(binPath);
+    const ghPath = join(binPath, "gh");
+    await writeFile(ghPath, "#!/bin/sh\nexit 1\n");
+    await chmod(ghPath, 0o755);
+    vi.stubEnv("PATH", `${binPath}:${process.env.PATH}`);
+
+    const review = await buildReview(repositoryPath);
+
+    expect(review.baseRef).toBe("origin/main");
+    expect(
+      (
+        await git(
+          repositoryPath,
+          "rev-parse",
+          "--verify",
+          "refs/remotes/origin/main",
+        )
+      ).stdout.trim(),
+    ).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("uses local main when fetching is enabled but no origin exists", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+
+    const binPath = join(dirname(repositoryPath), "bin");
+    await mkdir(binPath);
+    const ghPath = join(binPath, "gh");
+    await writeFile(ghPath, "#!/bin/sh\nexit 1\n");
+    await chmod(ghPath, 0o755);
+    vi.stubEnv("PATH", `${binPath}:${process.env.PATH}`);
+
+    const review = await buildReview(repositoryPath);
+
+    expect(review.baseRef).toBe("main");
+    expect(review.warnings).toEqual([]);
+  });
+
+  it("does not fetch origin/main when fetching is disabled", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+
+    const remotePath = join(dirname(repositoryPath), "remote.git");
+    await mkdir(remotePath);
+    await git(remotePath, "init", "--bare");
+    await git(repositoryPath, "remote", "add", "origin", remotePath);
+    await git(repositoryPath, "push", "origin", "main");
+    await git(
+      repositoryPath,
+      "update-ref",
+      "-d",
+      "refs/remotes/origin/main",
+    );
+    await git(repositoryPath, "switch", "-c", "feature");
+
+    const review = await buildReview(repositoryPath, undefined, false);
+
+    expect(review.baseRef).toBe("main");
+    await expect(
+      git(
+        repositoryPath,
+        "rev-parse",
+        "--verify",
+        "refs/remotes/origin/main",
+      ),
+    ).rejects.toThrow();
+  });
+
   it("fetches and honors a GitHub pull request base that is absent locally", async () => {
     const repositoryPath = await createRepository();
     await write(repositoryPath, "README.md", "base\n");

@@ -101,18 +101,27 @@ async function selectBase(
     );
   }
 
-  for (const candidate of ["origin/main", "main"]) {
-    if (await refExists(repositoryPath, candidate)) {
-      if (fetch && candidate === "origin/main") {
-        await refreshRemoteBranch(repositoryPath, "main", warnings);
-      }
-      return candidate;
-    }
+  if (fetch && (await remoteExists(repositoryPath, "origin"))) {
+    await refreshRemoteBranch(repositoryPath, "main", warnings);
   }
+  if (await refExists(repositoryPath, "origin/main")) return "origin/main";
+  if (await refExists(repositoryPath, "main")) return "main";
 
   throw new Error(
     "Could not select a Git base ref (tried pull request base, origin/main, and main)",
   );
+}
+
+async function remoteExists(
+  repositoryPath: string,
+  remote: string,
+): Promise<boolean> {
+  try {
+    await git(repositoryPath, ["remote", "get-url", remote]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function refreshRemoteBranch(
