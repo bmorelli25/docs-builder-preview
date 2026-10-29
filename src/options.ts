@@ -26,16 +26,17 @@ function parsePort(option: "--docs-port" | "--port") {
 export function parseOptions(argv: string[]): CliOptions {
   const program = new Command()
     .name("docs-builder-preview")
+    .description("Review branch documentation changes with docs-builder")
     .argument("[repository-path]")
-    .option("--base <ref>")
+    .option("--base <ref>", "compare against this Git ref")
     .option(
       "--docs-port <port>",
       "use an existing docs-builder server",
       parsePort("--docs-port"),
     )
     .option("--port <port>", "set the review app port", parsePort("--port"), 4173)
-    .option("--no-fetch")
-    .option("--no-open");
+    .option("--no-fetch", "do not refresh the selected remote base")
+    .option("--no-open", "do not open a browser");
 
   program.parse(argv, { from: "user" });
 

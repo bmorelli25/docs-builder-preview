@@ -23,6 +23,7 @@ export interface RunningServer {
   url: string;
   host: "127.0.0.1";
   port: number;
+  setReview(review: ReviewModel): void;
   broadcast(event: string, data?: unknown): number;
   refresh(): number;
   close(): Promise<void>;
@@ -184,6 +185,7 @@ async function proxyRequest(
 export async function startReviewServer(
   options: ServerOptions,
 ): Promise<RunningServer> {
+  let review = options.review;
   let upstreamBase: URL;
   try {
     const upstreamValue = options.docsBuilder?.url ?? options.upstreamUrl;
@@ -232,7 +234,7 @@ export async function startReviewServer(
       send(
         response,
         200,
-        createDashboard(options.review),
+        createDashboard(review),
         "text/html; charset=utf-8",
       );
       return;
@@ -242,7 +244,7 @@ export async function startReviewServer(
       send(
         response,
         200,
-        JSON.stringify(options.review),
+        JSON.stringify(review),
         "application/json; charset=utf-8",
       );
       return;
@@ -269,7 +271,7 @@ export async function startReviewServer(
     const upstream = new URL(upstreamBase);
     upstream.pathname = target.pathname;
     upstream.search = target.search;
-    const file = options.review.files.find(
+    const file = review.files.find(
       ({ route }) => route !== null && route === target.pathname,
     );
     await proxyRequest(request, response, upstream, file);
@@ -295,6 +297,9 @@ export async function startReviewServer(
     host: "127.0.0.1",
     port: address.port,
     url: `http://127.0.0.1:${address.port}`,
+    setReview: (nextReview) => {
+      review = nextReview;
+    },
     broadcast,
     refresh: () => broadcast("refresh"),
     close: async () => {

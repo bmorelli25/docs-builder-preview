@@ -23,6 +23,7 @@ export interface ChangedFile {
   previousPath?: string;
   status: FileStatus;
   route: string | null;
+  consumers?: string[];
   addedLines: number;
   deletedLines: number;
   blocks: ChangedBlock[];
