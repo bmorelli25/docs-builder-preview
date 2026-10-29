@@ -180,6 +180,166 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("segments an added Markdown page into semantic blocks", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/new.md",
+      [
+        "# New page",
+        "",
+        "A paragraph that spans",
+        "two source lines.",
+        "",
+        "- First item",
+        "- Second item",
+        "",
+      ].join("\n"),
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "added",
+        startLine: 1,
+        endLine: 1,
+        source: "# New page",
+      },
+      {
+        kind: "added",
+        startLine: 3,
+        endLine: 4,
+        source: "A paragraph that spans\ntwo source lines.",
+      },
+      {
+        kind: "added",
+        startLine: 6,
+        endLine: 6,
+        source: "- First item",
+      },
+      {
+        kind: "added",
+        startLine: 7,
+        endLine: 7,
+        source: "- Second item",
+      },
+    ]);
+  });
+
+  it("selects the full semantic paragraph when one line changes", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "Before.\n\nA paragraph spans\nits second line.\n\nAfter.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "Before.\n\nA paragraph spans\nan edited second line.\n\nAfter.\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "modified",
+        startLine: 3,
+        endLine: 4,
+        source: "A paragraph spans\nan edited second line.",
+      },
+    ]);
+  });
+
+  it("deduplicates a semantic block touched by adjacent hunks", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "First line.\nUnchanged middle.\nThird line.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "Edited first line.\nUnchanged middle.\nEdited third line.\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "modified",
+        startLine: 1,
+        endLine: 3,
+        source:
+          "Edited first line.\nUnchanged middle.\nEdited third line.",
+      },
+    ]);
+  });
+
+  it("retains a raw fallback for an unsupported frontmatter change", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docs/page.md", "---\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/page.md", "***\n");
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "modified",
+        startLine: 1,
+        endLine: 1,
+        source: "***",
+      },
+    ]);
+  });
+
+  it("keeps deleted and supporting files out of semantic blocks", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docs/deleted.md", "# Deleted\n");
+    await write(repositoryPath, "docs/navigation.yml", "toc: old\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await rm(join(repositoryPath, "docs/deleted.md"));
+    await write(repositoryPath, "docs/navigation.yml", "toc: new\n");
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(
+      review.files.find(({ path }) => path === "docs/deleted.md"),
+    ).toMatchObject({
+      status: "deleted",
+      addedLines: 0,
+      deletedLines: 1,
+      blocks: [],
+      deletedHunks: [
+        {
+          oldStartLine: 1,
+          oldEndLine: 1,
+          source: "# Deleted",
+        },
+      ],
+    });
+    expect(
+      review.files.find(({ path }) => path === "docs/navigation.yml"),
+    ).toMatchObject({
+      status: "modified",
+      addedLines: 1,
+      deletedLines: 1,
+      blocks: [],
+    });
+  });
+
   it("passes repository paths to Git without shell interpolation", async () => {
     const repositoryPath = await createRepository();
     await write(repositoryPath, "base.md", "base\n");

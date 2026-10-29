@@ -10,6 +10,7 @@ import type {
   FileStatus,
   ReviewModel,
 } from "./model.js";
+import { segmentMarkdown } from "./markdown.js";
 import { sourcePathToRoute } from "./routes.js";
 
 const execFileAsync = promisify(execFile);
@@ -257,15 +258,18 @@ function parseZeroContextDiff(output: string): ParsedDiff {
   return { addedLines, deletedLines, blocks, deletedHunks };
 }
 
-async function untrackedDiff(
+async function safeCurrentSource(
   repositoryPath: string,
   path: string,
+  isUntracked: boolean,
   isMarkdown: boolean,
-): Promise<ParsedDiff> {
+): Promise<string | undefined> {
   const fullPath = join(repositoryPath, path);
   const fileStatus = await lstat(fullPath);
   if (fileStatus.isSymbolicLink()) {
-    throw new Error(`Untracked symlink is not supported: ${path}`);
+    throw new Error(
+      `${isUntracked ? "Untracked" : "Markdown"} symlink is not supported: ${path}`,
+    );
   }
 
   const resolvedPath = await realpath(fullPath);
@@ -279,16 +283,23 @@ async function untrackedDiff(
   }
 
   if (!fileStatus.isFile() || !isMarkdown) {
-    return {
-      addedLines: 0,
-      deletedLines: 0,
-      blocks: [],
-      deletedHunks: [],
-    };
+    return undefined;
   }
 
   const contents = await readFile(resolvedPath);
   if (contents.includes(0)) {
+    return undefined;
+  }
+
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(contents);
+  } catch {
+    return undefined;
+  }
+}
+
+function untrackedDiff(source?: string): ParsedDiff {
+  if (source === undefined) {
     return {
       addedLines: 0,
       deletedLines: 0,
@@ -297,17 +308,6 @@ async function untrackedDiff(
     };
   }
 
-  let source: string;
-  try {
-    source = new TextDecoder("utf-8", { fatal: true }).decode(contents);
-  } catch {
-    return {
-      addedLines: 0,
-      deletedLines: 0,
-      blocks: [],
-      deletedHunks: [],
-    };
-  }
   const lines = source.endsWith("\n")
     ? source.slice(0, -1).split("\n")
     : source.split("\n");
@@ -328,6 +328,48 @@ async function untrackedDiff(
           ],
     deletedHunks: [],
   };
+}
+
+function overlaps(
+  left: Pick<ChangedBlock, "startLine" | "endLine">,
+  right: Pick<ChangedBlock, "startLine" | "endLine">,
+): boolean {
+  return left.startLine <= right.endLine && right.startLine <= left.endLine;
+}
+
+function semanticChangedBlocks(
+  source: string,
+  changedRanges: ChangedBlock[],
+): ChangedBlock[] {
+  const semanticBlocks = segmentMarkdown(source);
+  const blocks: ChangedBlock[] = semanticBlocks.flatMap((block) => {
+    const overlappingRanges = changedRanges.filter((range) =>
+      overlaps(block, range),
+    );
+    if (overlappingRanges.length === 0) return [];
+
+    return [
+      {
+        kind: overlappingRanges.some(({ kind }) => kind === "modified")
+          ? "modified"
+          : "added",
+        startLine: block.startLine,
+        endLine: block.endLine,
+        source: block.source,
+      },
+    ];
+  });
+
+  for (const range of changedRanges) {
+    if (!semanticBlocks.some((block) => overlaps(block, range))) {
+      blocks.push(range);
+    }
+  }
+
+  return blocks.sort(
+    (left, right) =>
+      left.startLine - right.startLine || left.endLine - right.endLine,
+  );
 }
 
 export async function buildReview(
@@ -374,8 +416,17 @@ export async function buildReview(
       const isUntracked = untracked.some(({ path }) => path === file.path);
       const route = sourcePathToRoute(file.path);
       const isMarkdown = /\.(?:md|mdx)$/i.test(file.path);
+      const currentSource =
+        file.status === "deleted" || (!isUntracked && !isMarkdown)
+          ? undefined
+          : await safeCurrentSource(
+              gitRoot,
+              file.path,
+              isUntracked,
+              isMarkdown,
+            );
       const parsedDiff = isUntracked
-        ? await untrackedDiff(gitRoot, file.path, isMarkdown)
+        ? untrackedDiff(currentSource)
         : parseZeroContextDiff(
             await git(gitRoot, [
               "diff",
@@ -391,9 +442,16 @@ export async function buildReview(
               file.path,
             ]),
           );
-      const diff = isMarkdown
-        ? parsedDiff
-        : { ...parsedDiff, blocks: [] };
+      const diff =
+        isMarkdown && currentSource !== undefined
+          ? {
+              ...parsedDiff,
+              blocks: semanticChangedBlocks(
+                currentSource,
+                parsedDiff.blocks,
+              ),
+            }
+          : { ...parsedDiff, blocks: [] };
 
       return {
         ...file,
