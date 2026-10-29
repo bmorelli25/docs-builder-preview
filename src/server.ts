@@ -23,6 +23,8 @@ export interface RunningServer {
   url: string;
   host: "127.0.0.1";
   port: number;
+  broadcast(event: string, data?: unknown): number;
+  refresh(): number;
   close(): Promise<void>;
 }
 
@@ -78,6 +80,14 @@ function send(
     "x-content-type-options": "nosniff",
   });
   response.end(body);
+}
+
+function sseMessage(event: string, data: unknown = {}): string {
+  if (!/^[A-Za-z0-9_.-]+$/.test(event)) {
+    throw new Error(`Invalid SSE event name: ${event}`);
+  }
+  const serialized = JSON.stringify(data ?? {});
+  return `event: ${event}\ndata: ${serialized}\n\n`;
 }
 
 function forwardedHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
@@ -192,6 +202,21 @@ export async function startReviewServer(
     throw error;
   }
 
+  const eventClients = new Set<ServerResponse>();
+  const broadcast = (event: string, data: unknown = {}) => {
+    const message = sseMessage(event, data);
+    let recipients = 0;
+    for (const client of eventClients) {
+      if (client.destroyed || client.writableEnded) {
+        eventClients.delete(client);
+        continue;
+      }
+      client.write(message);
+      recipients++;
+    }
+    return recipients;
+  };
+
   const server = createServer(async (request, response) => {
     const target = safeRequestTarget(request.url ?? "");
     if (!target) {
@@ -220,6 +245,24 @@ export async function startReviewServer(
         JSON.stringify(options.review),
         "application/json; charset=utf-8",
       );
+      return;
+    }
+    if (target.pathname === "/api/events") {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+        "x-content-type-options": "nosniff",
+      });
+      if (request.method === "HEAD") {
+        response.end();
+        return;
+      }
+      eventClients.add(response);
+      const removeClient = () => eventClients.delete(response);
+      response.once("close", removeClient);
+      response.write(sseMessage("connected"));
       return;
     }
 
@@ -252,9 +295,13 @@ export async function startReviewServer(
     host: "127.0.0.1",
     port: address.port,
     url: `http://127.0.0.1:${address.port}`,
+    broadcast,
+    refresh: () => broadcast("refresh"),
     close: async () => {
       if (closed) return;
       closed = true;
+      for (const client of eventClients) client.end();
+      eventClients.clear();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeAllConnections();

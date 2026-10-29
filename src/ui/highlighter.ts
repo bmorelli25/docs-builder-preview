@@ -24,6 +24,9 @@ export function createHighlighterScript(file: ChangedFile | undefined): string {
   "use strict";
   const file = ${safeJson(payload)};
   if (!file || document.getElementById("docs-review-toolbar")) return;
+  const events = new EventSource("/api/events");
+  events.addEventListener("refresh", () => window.location.reload());
+  window.addEventListener("beforeunload", () => events.close(), { once: true });
 
   const normalize = (value) => value
     .normalize("NFKC")

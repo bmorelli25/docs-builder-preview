@@ -61,6 +61,33 @@ describe("ensureDocsBuilder", () => {
     expect(server.listening).toBe(true);
   });
 
+  it("does not reuse an arbitrary server returning a 404", async () => {
+    const server = createServer((_request, response) => {
+      response.statusCode = 404;
+      response.end("not docs-builder");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    cleanup.push(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no address");
+
+    await expect(
+      ensureDocsBuilder({
+        repositoryPath: process.cwd(),
+        port: address.port,
+        command: "/does/not/exist",
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow(/failed to start/i);
+  });
+
   it("starts with an argument array, waits for readiness, and stops its child", async () => {
     const directory = await mkdtemp(join(tmpdir(), "docs-builder-command-"));
     cleanup.push(() => rm(directory, { recursive: true, force: true }));
@@ -122,5 +149,25 @@ http.createServer((req, res) => {
         timeoutMs: 1_000,
       }),
     ).rejects.toThrow(/exited.*7/i);
+  });
+
+  it("reports a child signal exit before the readiness timeout", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "docs-builder-signal-"));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const script = join(directory, "signal.cjs");
+    await writeFile(
+      script,
+      'process.kill(process.pid, "SIGTERM");\n',
+    );
+
+    await expect(
+      ensureDocsBuilder({
+        repositoryPath: process.cwd(),
+        port: await availablePort(),
+        command: process.execPath,
+        args: [script],
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow(/signal SIGTERM/i);
   });
 });

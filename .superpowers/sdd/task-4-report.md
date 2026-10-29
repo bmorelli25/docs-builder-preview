@@ -103,3 +103,58 @@ Result: exit 0.
 - The default docs-builder invocation is `docs-builder serve --port <port>` in the repository working directory. Callers can supply `command` and `args` if a local installation uses a different entry point.
 - Token matching deliberately leaves blocks shorter than three tokens unmatched unless their full normalized text has one exact DOM match.
 - npm emits the pre-existing `devdir` configuration warning.
+
+## Findings fixes
+
+### Red
+
+Focused findings command:
+
+```text
+npm test -- test/server.test.ts test/docs-builder.test.ts
+```
+
+Result: exit 1, 3 tests failed and 11 passed. `/api/events` was proxied upstream instead of being app-owned, a 404 response was incorrectly reused as docs-builder, and a child terminated by `SIGTERM` timed out instead of reporting its signal.
+
+SSE cleanup command:
+
+```text
+npm test -- test/server.test.ts
+```
+
+Result: exit 1, 2 tests failed and 7 passed. The broadcast methods did not return registered-recipient counts, so disconnect and shutdown cleanup were not observable.
+
+Browser refresh command:
+
+```text
+npm test -- test/ui.test.ts
+```
+
+Result: exit 1, 1 test failed and 4 passed. The generated highlighter did not subscribe to app refresh events.
+
+### Green
+
+Focused verification:
+
+```text
+npm test -- test/server.test.ts test/docs-builder.test.ts test/ui.test.ts
+```
+
+Result: exit 0, 3 test files passed and 19 tests passed.
+
+Type and whitespace verification:
+
+```text
+npm run typecheck && git diff --check
+```
+
+Result: exit 0. TypeScript reported no errors and Git reported no whitespace errors.
+
+### Self-review
+
+- `/api/events` is handled by the review app before proxy routing. Each connection receives `event: connected`, is registered for broadcasts, and is removed when its response closes.
+- `broadcast()` and `refresh()` return the recipient count. Tests verify one active recipient, zero after disconnect, and zero after shutdown.
+- Shutdown ends app-owned SSE responses before closing remaining server connections.
+- Generated preview JavaScript subscribes with `EventSource`, reloads only for `refresh`, and closes its stream during page unload.
+- Readiness now requires a 2xx response. Arbitrary 4xx services on the requested port are not reused.
+- Startup checks both `exitCode` and `signalCode`, reporting a terminating signal before the readiness timeout.

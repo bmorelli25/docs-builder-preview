@@ -65,6 +65,14 @@ describe("generated browser assets", () => {
     );
   });
 
+  it("reloads the preview when the app broadcasts a refresh", () => {
+    const script = createHighlighterScript(rootFile);
+
+    expect(script).toContain('new EventSource("/api/events")');
+    expect(script).toContain('addEventListener("refresh"');
+    expect(script).toContain("window.location.reload()");
+  });
+
   it("exports distinct added and modified highlight styles", () => {
     expect(reviewStyles).toContain('[data-docs-review-mark="added"]');
     expect(reviewStyles).toContain('[data-docs-review-mark="modified"]');

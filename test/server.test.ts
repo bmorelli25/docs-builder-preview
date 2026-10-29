@@ -104,6 +104,19 @@ async function start(upstreamUrl: string): Promise<RunningServer> {
   return server;
 }
 
+async function readUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  expected: string,
+): Promise<string> {
+  let received = "";
+  while (!received.includes(expected)) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    received += new TextDecoder().decode(chunk.value);
+  }
+  return received;
+}
+
 describe("startReviewServer", () => {
   it("serves the dashboard and review API on localhost", async () => {
     const upstream = await fakeUpstream();
@@ -180,6 +193,47 @@ describe("startReviewServer", () => {
     const chunk = await reader.read();
     await reader.cancel();
     expect(new TextDecoder().decode(chunk.value)).toBe("data: ready\n\n");
+  });
+
+  it("owns an SSE endpoint and broadcasts refresh events", async () => {
+    const upstream = await fakeUpstream();
+    const server = await start(upstream.url);
+    const response = await fetch(`${server.url}/api/events`);
+    const reader = response.body!.getReader();
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(await readUntil(reader, "event: connected")).toContain(
+      "event: connected\ndata: {}\n\n",
+    );
+    expect(upstream.requests).toEqual([]);
+
+    expect(server.broadcast("review", { changed: true })).toBe(1);
+    expect(await readUntil(reader, "event: review")).toContain(
+      'event: review\ndata: {"changed":true}\n\n',
+    );
+
+    expect(server.refresh()).toBe(1);
+    expect(await readUntil(reader, "event: refresh")).toContain(
+      "event: refresh\ndata: {}\n\n",
+    );
+
+    await reader.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.broadcast("review")).toBe(0);
+  });
+
+  it("ends app-owned SSE clients during shutdown", async () => {
+    const upstream = await fakeUpstream();
+    const server = await start(upstream.url);
+    const response = await fetch(`${server.url}/api/events`);
+    const reader = response.body!.getReader();
+    await readUntil(reader, "event: connected");
+
+    await server.close();
+
+    const result = await reader.read();
+    expect(result.done).toBe(true);
+    expect(server.broadcast("review")).toBe(0);
   });
 
   it("closes promptly with an active SSE connection", async () => {

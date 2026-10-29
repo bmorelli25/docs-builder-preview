@@ -27,7 +27,7 @@ async function isReady(url: string): Promise<boolean> {
       redirect: "manual",
     });
     await response.body?.cancel();
-    return response.status < 500;
+    return response.status >= 200 && response.status < 300;
   } catch {
     return false;
   }
@@ -106,6 +106,11 @@ export async function ensureDocsBuilder(
     if (child.exitCode !== null) {
       throw new Error(
         `docs-builder exited with code ${child.exitCode} before becoming ready`,
+      );
+    }
+    if (child.signalCode !== null) {
+      throw new Error(
+        `docs-builder exited with signal ${child.signalCode} before becoming ready`,
       );
     }
     if (await isReady(readyUrl)) {
