@@ -8,6 +8,7 @@ export interface DocsBuilderOptions {
   readinessPath?: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  existingOnly?: boolean;
 }
 
 export interface DocsBuilderHandle {
@@ -63,6 +64,11 @@ export async function ensureDocsBuilder(
       owned: false,
       stop: async () => {},
     };
+  }
+  if (options.existingOnly) {
+    throw new Error(
+      `No healthy docs-builder server is listening at ${readyUrl}`,
+    );
   }
 
   const args = [...(options.args ?? ["serve"])];

@@ -18,6 +18,61 @@ export interface CliRuntime {
   stop(): Promise<void>;
 }
 
+interface CleanupCoordinator {
+  register(name: string, cleanup: () => Promise<void>): void;
+  stop(): Promise<void>;
+}
+
+export function createCleanupCoordinator(): CleanupCoordinator {
+  const resources = new Map<
+    string,
+    { cleanup: () => Promise<void>; complete: boolean }
+  >();
+  let activeStop: Promise<void> | undefined;
+
+  return {
+    register: (name, cleanup) => {
+      resources.set(name, { cleanup, complete: false });
+    },
+    stop: () => {
+      if (activeStop) return activeStop;
+      activeStop = (async () => {
+        const attempted = new Set<string>();
+        const failures: unknown[] = [];
+        const failedNames: string[] = [];
+        while (true) {
+          const pending = [...resources].filter(
+            ([name, resource]) => !resource.complete && !attempted.has(name),
+          );
+          if (pending.length === 0) break;
+          pending.forEach(([name]) => attempted.add(name));
+          const results = await Promise.allSettled(
+            pending.map(([, resource]) => resource.cleanup()),
+          );
+          results.forEach((result, index) => {
+            const [name, resource] = pending[index];
+            if (result.status === "fulfilled") {
+              resource.complete = true;
+            } else {
+              failures.push(result.reason);
+              failedNames.push(name);
+            }
+          });
+        }
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            `Failed to clean up ${failedNames.join(", ")}`,
+          );
+        }
+      })().finally(() => {
+        activeStop = undefined;
+      });
+      return activeStop;
+    },
+  };
+}
+
 async function buildReviewWithConsumers(
   options: CliOptions,
 ): Promise<ReviewModel> {
@@ -131,48 +186,21 @@ export async function runCli(options: CliOptions): Promise<CliRuntime> {
   const docsBuilder = await ensureDocsBuilder({
     repositoryPath: initialReview.repositoryPath,
     port: options.docsPort ?? 3000,
+    existingOnly: options.docsPort !== undefined,
   });
-  let server: RunningServer;
-  try {
-    server = await startReviewServer({
-      review: initialReview,
-      port: options.port,
-      docsBuilder,
-    });
-  } catch (error) {
-    if (docsBuilder.owned) await docsBuilder.stop();
-    throw error;
+  const cleanup = createCleanupCoordinator();
+  if (docsBuilder.owned) {
+    cleanup.register("docs-builder", docsBuilder.stop);
   }
-
-  let watcher: RepositoryWatcher;
-  try {
-    watcher = await watchRepository(
-      initialReview.repositoryPath,
-      async () => {
-        const review = await buildReviewWithConsumers({
-          ...options,
-          repositoryPath: initialReview.repositoryPath,
-          fetch: false,
-        });
-        server.setReview(review);
-        server.refresh();
-        info("Review data refreshed");
-      },
-      warn,
-    );
-  } catch (error) {
-    await server.close();
-    throw error;
-  }
-
-  let stopped = false;
+  let shutdownRequested = false;
   const stop = async () => {
-    if (stopped) return;
-    stopped = true;
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await watcher.close();
-    await server.close();
+    shutdownRequested = true;
+    try {
+      await cleanup.stop();
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+    }
   };
   const onSignal = () => {
     void stop().catch((error) => {
@@ -186,6 +214,49 @@ export async function runCli(options: CliOptions): Promise<CliRuntime> {
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
+
+  let server!: RunningServer;
+  try {
+    server = await startReviewServer({
+      review: initialReview,
+      port: options.port,
+      docsBuilder,
+    });
+    cleanup.register("server", server.close);
+    if (shutdownRequested) {
+      await stop();
+      throw new Error("Startup interrupted by shutdown signal");
+    }
+    const watcher = await watchRepository(
+      initialReview.repositoryPath,
+      async () => {
+        const review = await buildReviewWithConsumers({
+          ...options,
+          repositoryPath: initialReview.repositoryPath,
+          fetch: false,
+        });
+        server.setReview(review);
+        server.refresh();
+        info("Review data refreshed");
+      },
+      warn,
+    );
+    cleanup.register("watcher", watcher.close);
+    if (shutdownRequested) {
+      await stop();
+      throw new Error("Startup interrupted by shutdown signal");
+    }
+  } catch (error) {
+    try {
+      await stop();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "CLI startup failed and cleanup was incomplete",
+      );
+    }
+    throw error;
+  }
 
   info(`Review: ${server.url}`);
   info(

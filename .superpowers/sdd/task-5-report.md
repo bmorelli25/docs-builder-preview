@@ -114,3 +114,95 @@ skipping when it may block, so it was not started.
 - The real docs-content build was not run, as described above.
 - npm emits an existing `Unknown env config "devdir"` warning for each npm
   command. It does not affect tests, typechecking, linking, or the build.
+
+## Review findings follow-up
+
+Status: DONE
+
+### Red evidence
+
+The new user-facing regression tests failed before implementation:
+
+```text
+npm test -- test/ui.test.ts test/server.test.ts test/docs-builder.test.ts test/cli.test.ts
+
+Test Files  4 failed (4)
+Tests  6 failed | 20 passed (26)
+```
+
+The failures showed that:
+
+- snippet consumers were absent from the dashboard;
+- `review-source` selectors were neither applied nor validated;
+- the dashboard did not create an EventSource;
+- explicit `--docs-port` launched docs-builder when no server was healthy;
+- no independent, retry-safe cleanup coordinator existed.
+
+A second CLI regression test then exposed that production review generation
+discarded snippet blocks:
+
+```text
+AssertionError: expected the changed snippet to contain
+source: "First change.", but blocks was []
+```
+
+### Fixes
+
+- Dashboard entries for changed snippets now list each Markdown consumer as a
+  proxied link with an encoded `review-source` selector.
+- The proxy accepts a selector only when it names a changed review file and
+  the requested route belongs to one of that file's consumers. It strips the
+  internal selector before proxying and returns HTTP 400 for unknown,
+  duplicated, or unrelated selectors.
+- Markdown diff blocks are retained for snippets and other Markdown files
+  without standalone routes, allowing the consumer preview to inject and
+  highlight the changed included content.
+- The dashboard subscribes to `/api/events`, reloads on `refresh`, and closes
+  its EventSource during page teardown.
+- Cleanup uses `Promise.allSettled` across the watcher, review server, and
+  owned docs-builder. Successful resources stay complete; failed resources
+  can be retried. Signal listeners are installed immediately after
+  docs-builder acquisition and are removed in `finally`.
+- `--docs-port` now requires a healthy existing service. It never launches a
+  process when the option is supplied.
+- README usage and option text now distinguish the default managed port 3000
+  behavior from explicit existing-server mode.
+
+### Green evidence
+
+Focused verification:
+
+```text
+Test Files  4 passed (4)
+Tests  28 passed (28)
+```
+
+Final verification:
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  83 passed (83)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
+The real `/Users/brandonmorelli/docs-content` smoke test was intentionally not
+run. The parent agent will run it after review.
+
+### Follow-up self-review
+
+- The integration path now starts from a real Git fixture, verifies the
+  generated consumer link, opens it through the proxy, and observes the
+  snippet's changed source in the injected highlighter.
+- Selector authorization is derived only from the current review model. A
+  caller cannot select an arbitrary repository path or apply a snippet to an
+  unrelated route.
+- Review-server shutdown closes HTTP connections even if owned docs-builder
+  cleanup fails, then retries only the failed docs-builder cleanup.
+- CLI shutdown attempts all registered resources in parallel and reports
+  aggregate failures without losing retry state.
+- Reused docs-builder services remain unowned and are never registered for
+  CLI cleanup.

@@ -88,6 +88,17 @@ describe("ensureDocsBuilder", () => {
     ).rejects.toThrow(/failed to start/i);
   });
 
+  it("fails instead of launching when an existing server is required", async () => {
+    await expect(
+      ensureDocsBuilder({
+        repositoryPath: process.cwd(),
+        port: await availablePort(),
+        command: "/does/not/exist",
+        existingOnly: true,
+      }),
+    ).rejects.toThrow(/no healthy docs-builder server.*listening/i);
+  });
+
   it("starts with an argument array, waits for readiness, and stops its child", async () => {
     const directory = await mkdtemp(join(tmpdir(), "docs-builder-command-"));
     cleanup.push(() => rm(directory, { recursive: true, force: true }));

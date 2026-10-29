@@ -35,6 +35,65 @@ describe("generated browser assets", () => {
     expect(createDashboard(review)).toContain('href="/?preview=1"');
   });
 
+  it("links snippet consumers through a review-source selector", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [
+        {
+          ...rootFile,
+          path: "docs/_snippets/shared.md",
+          route: null,
+          consumers: ["docs/guide.md"],
+        },
+      ],
+      warnings: [],
+    };
+
+    const dashboard = createDashboard(review);
+    expect(dashboard).toContain("docs/guide.md");
+    expect(dashboard).toContain(
+      'href="/docs/guide?review-source=docs%2F_snippets%2Fshared.md"',
+    );
+  });
+
+  it("reloads the dashboard when review data refreshes", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [],
+      warnings: [],
+    };
+
+    const dashboard = createDashboard(review);
+    const script = dashboard.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    expect(script).toBeDefined();
+    let refresh: (() => void) | undefined;
+    let reloads = 0;
+    class EventSourceStub {
+      constructor(url: string) {
+        expect(url).toBe("/api/events");
+      }
+      addEventListener(event: string, listener: () => void) {
+        if (event === "refresh") refresh = listener;
+      }
+      close() {}
+    }
+    const windowStub = {
+      location: { reload: () => reloads++ },
+      addEventListener() {},
+    };
+
+    new Function("EventSource", "window", script!)(
+      EventSourceStub,
+      windowStub,
+    );
+    refresh?.();
+    expect(reloads).toBe(1);
+  });
+
   it("emits syntactically valid, injection-safe highlighter JavaScript", () => {
     const script = createHighlighterScript(rootFile);
 

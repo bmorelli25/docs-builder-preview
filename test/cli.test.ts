@@ -6,7 +6,11 @@ import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { runCli, type CliRuntime } from "../src/cli.js";
+import {
+  createCleanupCoordinator,
+  runCli,
+  type CliRuntime,
+} from "../src/cli.js";
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -126,7 +130,15 @@ describe("runCli", () => {
 
     const dashboard = await fetch(runtime.url);
     expect(dashboard.status).toBe(200);
-    expect(await dashboard.text()).toContain("docs/_snippets/shared.md");
+    const dashboardHtml = await dashboard.text();
+    expect(dashboardHtml).toContain("docs/_snippets/shared.md");
+    expect(dashboardHtml).toContain(
+      'href="/docs/page?review-source=docs%2F_snippets%2Fshared.md"',
+    );
+    const consumerPreview = await fetch(
+      `${runtime.url}/docs/page?review-source=docs%2F_snippets%2Fshared.md`,
+    ).then((response) => response.text());
+    expect(consumerPreview).toContain("First change.");
 
     const initialReview = await fetch(`${runtime.url}/api/review`).then(
       (response) => response.json(),
@@ -135,6 +147,11 @@ describe("runCli", () => {
       expect.objectContaining({
         path: "docs/_snippets/shared.md",
         consumers: ["docs/page.md"],
+        blocks: [
+          expect.objectContaining({
+            source: "First change.",
+          }),
+        ],
       }),
     );
 
@@ -169,5 +186,54 @@ describe("runCli", () => {
       "status",
       200,
     );
+  });
+
+  it("requires --docs-port to identify a healthy existing server", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const signalListeners = {
+      SIGINT: process.listenerCount("SIGINT"),
+      SIGTERM: process.listenerCount("SIGTERM"),
+    };
+
+    await expect(
+      runCli({
+        repositoryPath,
+        base: "main",
+        docsPort: await unusedPort(),
+        port: await unusedPort(),
+        fetch: false,
+        open: false,
+      }),
+    ).rejects.toThrow(/no healthy docs-builder server.*listening/i);
+
+    expect(process.listenerCount("SIGINT")).toBe(signalListeners.SIGINT);
+    expect(process.listenerCount("SIGTERM")).toBe(signalListeners.SIGTERM);
+  });
+});
+
+describe("cleanup coordination", () => {
+  it("attempts every cleanup and retries only failed resources", async () => {
+    const attempts = { watcher: 0, server: 0, docsBuilder: 0 };
+    const cleanup = createCleanupCoordinator();
+    cleanup.register("watcher", async () => {
+      attempts.watcher++;
+      if (attempts.watcher === 1) throw new Error("watcher close failed");
+    });
+    cleanup.register("server", async () => {
+      attempts.server++;
+      if (attempts.server === 1) throw new Error("server close failed");
+    });
+    cleanup.register("docs-builder", async () => {
+      attempts.docsBuilder++;
+    });
+
+    await expect(cleanup.stop()).rejects.toThrow(/watcher.*server/i);
+    expect(attempts).toEqual({ watcher: 1, server: 1, docsBuilder: 1 });
+
+    await cleanup.stop();
+    expect(attempts).toEqual({ watcher: 2, server: 2, docsBuilder: 1 });
+
+    await cleanup.stop();
+    expect(attempts).toEqual({ watcher: 2, server: 2, docsBuilder: 1 });
   });
 });

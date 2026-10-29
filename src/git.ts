@@ -373,8 +373,9 @@ export async function buildReview(
     [...tracked, ...untracked].map(async (file): Promise<ChangedFile> => {
       const isUntracked = untracked.some(({ path }) => path === file.path);
       const route = sourcePathToRoute(file.path);
+      const isMarkdown = /\.(?:md|mdx)$/i.test(file.path);
       const parsedDiff = isUntracked
-        ? await untrackedDiff(gitRoot, file.path, route !== null)
+        ? await untrackedDiff(gitRoot, file.path, isMarkdown)
         : parseZeroContextDiff(
             await git(gitRoot, [
               "diff",
@@ -390,8 +391,9 @@ export async function buildReview(
               file.path,
             ]),
           );
-      const diff =
-        route === null ? { ...parsedDiff, blocks: [] } : parsedDiff;
+      const diff = isMarkdown
+        ? parsedDiff
+        : { ...parsedDiff, blocks: [] };
 
       return {
         ...file,

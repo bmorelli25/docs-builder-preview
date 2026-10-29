@@ -61,7 +61,7 @@ async function fakeUpstream(): Promise<{
   const requests: string[] = [];
   const server = createServer((request, response) => {
     requests.push(request.url ?? "");
-    if (request.url === "/guide") {
+    if (request.url === "/guide" || request.url === "/docs/guide") {
       response.setHeader("content-type", "text/html; charset=utf-8");
       response.end("<!doctype html><html><body><main>Guide</main></body></html>");
       return;
@@ -150,6 +150,83 @@ describe("startReviewServer", () => {
     );
     expect(html).toContain("Unmatched");
     expect(html).toContain("Removed sentence");
+  });
+
+  it("uses a validated snippet selector to highlight included content", async () => {
+    const upstream = await fakeUpstream();
+    const snippetReview: ReviewModel = {
+      ...review,
+      files: [
+        {
+          path: "docs/_snippets/shared.md",
+          status: "modified",
+          route: null,
+          consumers: ["docs/guide.md"],
+          addedLines: 1,
+          deletedLines: 0,
+          blocks: [
+            {
+              kind: "modified",
+              startLine: 1,
+              endLine: 1,
+              source: "Changed included text.",
+            },
+          ],
+          deletedHunks: [],
+        },
+      ],
+    };
+    const server = await startReviewServer({
+      review: snippetReview,
+      port: 0,
+      upstreamUrl: upstream.url,
+    });
+    running.push(server);
+
+    const dashboard = await fetch(server.url).then((response) => response.text());
+    expect(dashboard).toContain(
+      'href="/docs/guide?review-source=docs%2F_snippets%2Fshared.md"',
+    );
+
+    const page = await fetch(
+      `${server.url}/docs/guide?review-source=docs%2F_snippets%2Fshared.md`,
+    );
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("Changed included text.");
+    expect(upstream.requests).toContain("/docs/guide");
+  });
+
+  it("rejects unknown or unrelated review-source selectors", async () => {
+    const upstream = await fakeUpstream();
+    const snippetReview: ReviewModel = {
+      ...review,
+      files: [
+        {
+          path: "docs/_snippets/shared.md",
+          status: "modified",
+          route: null,
+          consumers: ["docs/guide.md"],
+          addedLines: 1,
+          deletedLines: 0,
+          blocks: [],
+          deletedHunks: [],
+        },
+      ],
+    };
+    const server = await startReviewServer({
+      review: snippetReview,
+      port: 0,
+      upstreamUrl: upstream.url,
+    });
+    running.push(server);
+
+    for (const path of [
+      "/docs/guide?review-source=docs%2F_snippets%2Funknown.md",
+      "/other?review-source=docs%2F_snippets%2Fshared.md",
+    ]) {
+      expect(await fetch(`${server.url}${path}`)).toHaveProperty("status", 400);
+    }
+    expect(upstream.requests).toEqual([]);
   });
 
   it("rejects traversal and authority-confusion request targets", async () => {
@@ -286,6 +363,31 @@ describe("startReviewServer", () => {
     });
     await reused.close();
     expect(reusedStops).toBe(0);
+  });
+
+  it("closes the server when owned docs-builder cleanup fails and retries that cleanup", async () => {
+    const upstream = await fakeUpstream();
+    let stops = 0;
+    const server = await startReviewServer({
+      review,
+      port: 0,
+      docsBuilder: {
+        url: upstream.url,
+        port: Number(new URL(upstream.url).port),
+        owned: true,
+        stop: async () => {
+          stops++;
+          if (stops === 1) throw new Error("stop failed");
+        },
+      },
+    });
+
+    await expect(server.close()).rejects.toThrow(/docs-builder/);
+    await expect(fetch(server.url)).rejects.toThrow();
+    expect(stops).toBe(1);
+
+    await server.close();
+    expect(stops).toBe(2);
   });
 
   it("stops an owned docs-builder when upstream validation fails", async () => {

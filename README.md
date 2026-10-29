@@ -35,17 +35,21 @@ Or pass the repository path:
 docs-builder-preview /path/to/docs-content
 ```
 
-The command starts or reuses docs-builder, starts the review app on
-`127.0.0.1`, and opens it in the default browser. It watches the repository,
+The command starts or reuses docs-builder on port 3000, starts the review app
+on `127.0.0.1`, and opens it in the default browser. It watches the repository,
 rebuilds review data after changes, and refreshes connected previews. Press
 Ctrl+C to stop services started by the command. A docs-builder server that was
 already running is never stopped.
+
+Pass `--docs-port` only to use an existing docs-builder server on a specific
+port. The command fails if that server is not healthy. It never launches a new
+docs-builder process when this option is present.
 
 ### Options
 
 ```text
 --base <ref>        Compare against this Git ref
---docs-port <port>  Use docs-builder on this port (default: 3000)
+--docs-port <port>  Require an existing docs-builder server on this port
 --port <port>       Run the review app on this port (default: 4173)
 --no-fetch          Do not refresh the selected remote base
 --no-open           Do not open a browser

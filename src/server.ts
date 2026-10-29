@@ -8,6 +8,7 @@ import { request as httpsRequest } from "node:https";
 
 import type { DocsBuilderHandle } from "./docs-builder.js";
 import type { ChangedFile, ReviewModel } from "./model.js";
+import { sourcePathToRoute } from "./routes.js";
 import { createDashboard } from "./ui/dashboard.js";
 import { createHighlighterScript } from "./ui/highlighter.js";
 import { reviewStyles } from "./ui/styles.js";
@@ -268,12 +269,27 @@ export async function startReviewServer(
       return;
     }
 
+    const selectors = target.searchParams.getAll("review-source");
+    let file: ChangedFile | undefined;
+    if (selectors.length > 0) {
+      const selector = selectors[0];
+      file = review.files.find(({ path }) => path === selector);
+      const isConsumer = file?.consumers?.some(
+        (consumer) => sourcePathToRoute(consumer) === target.pathname,
+      );
+      if (selectors.length !== 1 || !selector || !file || !isConsumer) {
+        send(response, 400, "Invalid review source");
+        return;
+      }
+      target.searchParams.delete("review-source");
+    } else {
+      file = review.files.find(
+        ({ route }) => route !== null && route === target.pathname,
+      );
+    }
     const upstream = new URL(upstreamBase);
     upstream.pathname = target.pathname;
     upstream.search = target.search;
-    const file = review.files.find(
-      ({ route }) => route !== null && route === target.pathname,
-    );
     await proxyRequest(request, response, upstream, file);
   });
 
@@ -292,7 +308,9 @@ export async function startReviewServer(
     server.close();
     throw new Error("Review server did not receive a TCP address");
   }
-  let closed = false;
+  let serverClosed = false;
+  let docsBuilderStopped = !options.docsBuilder?.owned;
+  let activeClose: Promise<void> | undefined;
   return {
     host: "127.0.0.1",
     port: address.port,
@@ -302,16 +320,61 @@ export async function startReviewServer(
     },
     broadcast,
     refresh: () => broadcast("refresh"),
-    close: async () => {
-      if (closed) return;
-      closed = true;
+    close: () => {
+      if (activeClose) return activeClose;
       for (const client of eventClients) client.end();
       eventClients.clear();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
+      activeClose = (async () => {
+        const cleanups: Array<{
+          name: string;
+          run(): Promise<void>;
+          complete(): void;
+        }> = [];
+        if (!serverClosed) {
+          cleanups.push({
+            name: "review server",
+            run: () =>
+              new Promise<void>((resolve, reject) => {
+                server.close((error) => (error ? reject(error) : resolve()));
+                server.closeAllConnections();
+              }),
+            complete: () => {
+              serverClosed = true;
+            },
+          });
+        }
+        if (!docsBuilderStopped && options.docsBuilder) {
+          cleanups.push({
+            name: "docs-builder",
+            run: options.docsBuilder.stop,
+            complete: () => {
+              docsBuilderStopped = true;
+            },
+          });
+        }
+        const results = await Promise.allSettled(
+          cleanups.map((cleanup) => cleanup.run()),
+        );
+        const failures: unknown[] = [];
+        const failedNames: string[] = [];
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled") {
+            cleanups[index].complete();
+          } else {
+            failures.push(result.reason);
+            failedNames.push(cleanups[index].name);
+          }
+        });
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            `Failed to close ${failedNames.join(", ")}`,
+          );
+        }
+      })().finally(() => {
+        activeClose = undefined;
       });
-      if (options.docsBuilder?.owned) await options.docsBuilder.stop();
+      return activeClose;
     },
   };
 }

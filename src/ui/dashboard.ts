@@ -1,4 +1,5 @@
 import type { ReviewModel } from "../model.js";
+import { sourcePathToRoute } from "../routes.js";
 
 function escapeHtml(value: string): string {
   return value.replace(
@@ -20,8 +21,21 @@ export function createDashboard(review: ReviewModel): string {
       const path = escapeHtml(file.path);
       const label = `${path} (${file.status}, +${file.addedLines} −${file.deletedLines})`;
       const route = file.route === "/" ? "/?preview=1" : file.route;
-      return file.route
-        ? `<li><a href="${escapeHtml(route!)}">${label}</a></li>`
+      if (file.route) {
+        return `<li><a href="${escapeHtml(route!)}">${label}</a></li>`;
+      }
+      const consumers = (file.consumers ?? [])
+        .map((consumer) => {
+          const consumerRoute = sourcePathToRoute(consumer);
+          if (!consumerRoute) return "";
+          const separator = consumerRoute.includes("?") ? "&" : "?";
+          const href = `${consumerRoute}${separator}review-source=${encodeURIComponent(file.path)}`;
+          return `<li><a href="${escapeHtml(href)}">${escapeHtml(consumer)}</a></li>`;
+        })
+        .filter(Boolean)
+        .join("");
+      return consumers
+        ? `<li>${label}<ul>${consumers}</ul></li>`
         : `<li>${label} <span>no preview route</span></li>`;
     })
     .join("\n");
@@ -45,6 +59,11 @@ export function createDashboard(review: ReviewModel): string {
   <p>Base: <code>${escapeHtml(review.baseRef)}</code></p>
   ${warnings ? `<ul class="warnings">${warnings}</ul>` : ""}
   <ul>${files || "<li>No changed documentation files.</li>"}</ul>
+  <script>
+    const reviewEvents = new EventSource("/api/events");
+    reviewEvents.addEventListener("refresh", () => window.location.reload());
+    window.addEventListener("pagehide", () => reviewEvents.close(), { once: true });
+  </script>
 </body>
 </html>`;
 }
