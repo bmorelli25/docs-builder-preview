@@ -1,0 +1,25 @@
+{
+  "name": "docs-builder-preview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "docs-builder-preview": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^14.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.4"
+  }
+}
