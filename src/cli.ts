@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import {
+  watch as fsWatch,
+  type FSWatcher,
+  type WatchEventType,
+} from "node:fs";
 import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-
-import chokidar from "chokidar";
 
 import { ensureDocsBuilder } from "./docs-builder.js";
 import { buildReview } from "./git.js";
@@ -16,6 +19,10 @@ import { findSnippetConsumers } from "./snippets.js";
 export interface CliRuntime {
   url: string;
   stop(): Promise<void>;
+}
+
+export interface CliDependencies {
+  watchFactory?: RecursiveWatchFactory;
 }
 
 interface CleanupCoordinator {
@@ -116,19 +123,35 @@ interface RepositoryWatcher {
   close(): Promise<void>;
 }
 
-async function watchRepository(
+export type RecursiveWatchFactory = (
+  path: string,
+  options: { recursive: true },
+  listener: (
+    eventType: WatchEventType | string,
+    filename: string | Buffer | null,
+  ) => void,
+) => Pick<FSWatcher, "on" | "close">;
+
+const defaultWatchFactory: RecursiveWatchFactory = (
+  path,
+  options,
+  listener,
+) => fsWatch(path, options, listener);
+
+function ignoredWatchPath(filename: string | Buffer | null): boolean {
+  if (filename === null) return false;
+  return filename
+    .toString()
+    .split(/[\\/]+/)
+    .some((segment) => segment === ".git" || segment === "node_modules");
+}
+
+export async function watchRepository(
   repositoryPath: string,
   rebuild: () => Promise<void>,
   warn: (message: string) => void,
+  watchFactory: RecursiveWatchFactory = defaultWatchFactory,
 ): Promise<RepositoryWatcher> {
-  const watcher = chokidar.watch(repositoryPath, {
-    ignored: /(^|[/\\])(?:\.git|node_modules)([/\\]|$)/,
-    ignoreInitial: true,
-    awaitWriteFinish: {
-      stabilityThreshold: 75,
-      pollInterval: 10,
-    },
-  });
   let timer: NodeJS.Timeout | undefined;
   let closed = false;
   let rebuildQueue = Promise.resolve();
@@ -148,38 +171,69 @@ async function watchRepository(
     });
   };
 
-  watcher.on("all", () => {
-    if (closed) return;
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(enqueueRebuild, 75);
-  });
+  const watcher = watchFactory(
+    repositoryPath,
+    { recursive: true },
+    (_eventType, filename) => {
+      if (ignoredWatchPath(filename)) return;
+      if (closed) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(enqueueRebuild, 75);
+    },
+  );
+  let starting = true;
+  let startupError: Error | undefined;
   watcher.on("error", (error) => {
+    if (starting) {
+      startupError = error;
+      return;
+    }
+    if (closed) return;
     warn(
       `File watcher error: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
   });
-  try {
-    await new Promise<void>((resolveReady, rejectReady) => {
-      watcher.once("ready", resolveReady);
-      watcher.once("error", rejectReady);
-    });
-  } catch (error) {
-    await watcher.close();
-    throw error;
+  await new Promise<void>((resolveReady) => setImmediate(resolveReady));
+  starting = false;
+  if (startupError) {
+    closed = true;
+    try {
+      watcher.close();
+    } catch (closeError) {
+      throw new AggregateError(
+        [startupError, closeError],
+        `File watcher startup failed: ${startupError.message}`,
+      );
+    }
+    throw startupError;
   }
   return {
     close: async () => {
       closed = true;
       if (timer) clearTimeout(timer);
-      await watcher.close();
-      await rebuildQueue;
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => watcher.close()),
+        rebuildQueue,
+      ]);
+      const failures = results
+        .filter(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        )
+        .map((result) => result.reason);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Failed to close file watcher");
+      }
     },
   };
 }
 
-export async function runCli(options: CliOptions): Promise<CliRuntime> {
+export async function runCli(
+  options: CliOptions,
+  dependencies: CliDependencies = {},
+): Promise<CliRuntime> {
   const info = (message: string) => process.stdout.write(`${message}\n`);
   const warn = (message: string) => process.stderr.write(`${message}\n`);
   const initialReview = await buildReviewWithConsumers(options);
@@ -240,6 +294,7 @@ export async function runCli(options: CliOptions): Promise<CliRuntime> {
         info("Review data refreshed");
       },
       warn,
+      dependencies.watchFactory,
     );
     cleanup.register("watcher", watcher.close);
     if (shutdownRequested) {

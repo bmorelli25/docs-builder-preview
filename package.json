@@ -15,7 +15,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "chokidar": "^4.0.3",
     "commander": "^14.0.2"
   },
   "devDependencies": {

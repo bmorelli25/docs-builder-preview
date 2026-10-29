@@ -206,3 +206,72 @@ run. The parent agent will run it after review.
   aggregate failures without losing retry state.
 - Reused docs-builder services remain unowned and are never registered for
   CLI cleanup.
+
+## Large-repository watcher follow-up
+
+Status: DONE
+
+### Root cause
+
+Chokidar recursively installed per-directory and per-file watches across the
+real docs-content repository. On macOS this exhausted the process file
+descriptor limit and emitted `EMFILE: too many open files, watch` before CLI
+startup could become healthy.
+
+### Red evidence
+
+The regression tests were added before the watcher implementation changed:
+
+```text
+npm test -- test/cli.test.ts
+
+Test Files  1 failed (1)
+Tests  2 failed | 3 passed (5)
+```
+
+The failures showed that the watcher seam did not exist and an injected
+startup `EMFILE` error was ignored, allowing `runCli` to resolve instead of
+rejecting and cleaning up.
+
+### Fix
+
+- Replaced Chokidar with one native `node:fs.watch` call using
+  `{ recursive: true }`. On macOS this uses the bounded native recursive watch
+  facility instead of creating a descriptor for each repository entry.
+- Added an injectable recursive-watch factory used by both focused watcher
+  tests and CLI startup integration tests.
+- Watch events from `.git` and `node_modules` path segments are ignored.
+- Relevant events retain the 75 ms debounce and promise-chain serialization,
+  so rebuilds never overlap.
+- Startup yields one event-loop turn after registering the watcher error
+  handler. A startup error rejects immediately, closes the watcher, and
+  triggers the existing independent CLI resource cleanup.
+- Runtime watch errors remain visible on stderr. Shutdown clears pending
+  timers, closes the native watcher, and waits for queued rebuilds.
+- Removed Chokidar and its transitive dependency from the package and lock
+  files.
+
+### Regression coverage
+
+- Exactly one recursive watcher factory call is made for the repository root.
+- `.git` and nested `node_modules` events produce no rebuild.
+- Bursts debounce to one rebuild.
+- A second burst during an active rebuild queues exactly one serialized
+  rebuild.
+- Runtime watcher errors are reported.
+- Injected startup `EMFILE` rejects `runCli`, closes the watcher and review
+  server, removes signal listeners, and leaves a reused docs-builder running.
+
+### Green evidence
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  85 passed (85)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
+The real docs-content smoke test was not rerun in this subtask.

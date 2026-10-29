@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { createServer, type Server } from "node:http";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -9,13 +10,26 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createCleanupCoordinator,
   runCli,
+  watchRepository,
   type CliRuntime,
+  type RecursiveWatchFactory,
 } from "../src/cli.js";
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
 const runtimes: CliRuntime[] = [];
 const servers: Server[] = [];
+
+class FakeRecursiveWatcher extends EventEmitter {
+  closeCalls = 0;
+
+  close() {
+    this.closeCalls++;
+  }
+}
+
+const delay = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.stop()));
@@ -208,6 +222,114 @@ describe("runCli", () => {
 
     expect(process.listenerCount("SIGINT")).toBe(signalListeners.SIGINT);
     expect(process.listenerCount("SIGTERM")).toBe(signalListeners.SIGTERM);
+  });
+
+  it("rejects watcher startup errors and cleans up the review server", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const docsPort = await listen(
+      createServer((_request, response) => response.end("ready")),
+    );
+    const port = await unusedPort();
+    const nativeWatcher = new FakeRecursiveWatcher();
+    const watchFactory: RecursiveWatchFactory = () => {
+      queueMicrotask(() =>
+        nativeWatcher.emit(
+          "error",
+          Object.assign(new Error("too many open files"), { code: "EMFILE" }),
+        ),
+      );
+      return nativeWatcher;
+    };
+    const signalListeners = {
+      SIGINT: process.listenerCount("SIGINT"),
+      SIGTERM: process.listenerCount("SIGTERM"),
+    };
+
+    await expect(
+      runCli(
+        {
+          repositoryPath,
+          base: "main",
+          docsPort,
+          port,
+          fetch: false,
+          open: false,
+        },
+        { watchFactory },
+      ),
+    ).rejects.toThrow(/too many open files/);
+
+    expect(nativeWatcher.closeCalls).toBe(1);
+    await expect(fetch(`http://127.0.0.1:${port}`)).rejects.toThrow();
+    expect(process.listenerCount("SIGINT")).toBe(signalListeners.SIGINT);
+    expect(process.listenerCount("SIGTERM")).toBe(signalListeners.SIGTERM);
+    expect(await fetch(`http://127.0.0.1:${docsPort}`)).toHaveProperty(
+      "status",
+      200,
+    );
+  });
+});
+
+describe("watchRepository", () => {
+  it("uses one recursive watcher, filters ignored trees, debounces, and serializes rebuilds", async () => {
+    const nativeWatcher = new FakeRecursiveWatcher();
+    let listener:
+      | ((eventType: string, filename: string | Buffer | null) => void)
+      | undefined;
+    const calls: Array<{ path: string; recursive: boolean }> = [];
+    const watchFactory: RecursiveWatchFactory = (path, options, onChange) => {
+      calls.push({ path, recursive: options.recursive });
+      listener = onChange;
+      return nativeWatcher;
+    };
+    let rebuilds = 0;
+    let active = 0;
+    let maxActive = 0;
+    let releaseFirst: (() => void) | undefined;
+    const firstRebuild = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const warnings: string[] = [];
+    const watcher = await watchRepository(
+      "/large/repository",
+      async () => {
+        rebuilds++;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        if (rebuilds === 1) await firstRebuild;
+        active--;
+      },
+      (warning) => warnings.push(warning),
+      watchFactory,
+    );
+
+    expect(calls).toEqual([
+      { path: "/large/repository", recursive: true },
+    ]);
+    listener!("change", ".git/index");
+    listener!("rename", "packages/node_modules/pkg/index.js");
+    await delay(100);
+    expect(rebuilds).toBe(0);
+
+    listener!("change", "docs/one.md");
+    listener!("change", "docs/two.md");
+    listener!("rename", "docs/three.md");
+    await delay(150);
+    expect(rebuilds).toBe(1);
+
+    listener!("change", "docs/four.md");
+    listener!("change", "docs/five.md");
+    await delay(150);
+    expect(rebuilds).toBe(1);
+    releaseFirst!();
+    await delay(20);
+    expect(rebuilds).toBe(2);
+    expect(maxActive).toBe(1);
+    nativeWatcher.emit("error", new Error("watch stream failed"));
+    expect(warnings).toEqual(["File watcher error: watch stream failed"]);
+
+    await watcher.close();
+    expect(nativeWatcher.closeCalls).toBe(1);
   });
 });
 
