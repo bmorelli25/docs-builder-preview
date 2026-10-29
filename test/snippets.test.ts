@@ -101,7 +101,6 @@ describe("findSnippetConsumers", () => {
         ["docs/another.md", "docs/guide/page.md"],
       ],
       ["examples/example.ts", ["docs/guide/page.md"]],
-      ["docs/_snippets/missing.md", []],
     ]);
   });
 
@@ -140,5 +139,43 @@ describe("findSnippetConsumers", () => {
     ]);
 
     expect(consumers.get("docs/_snippets/shared.md")).toEqual([]);
+  });
+
+  it("canonicalizes snippet and include symlinks without escaping the Git root", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docs/_snippets/shared.md", "Shared.\n");
+    const outsidePath = join(dirname(repositoryPath), "outside.md");
+    await writeFile(outsidePath, "Outside.\n");
+    await symlink(
+      "shared.md",
+      join(repositoryPath, "docs", "_snippets", "internal-alias.md"),
+    );
+    await symlink(
+      outsidePath,
+      join(repositoryPath, "docs", "_snippets", "escaped.md"),
+    );
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      [
+        "```{include} _snippets/internal-alias.md",
+        "```",
+        "",
+        "```{include} _snippets/escaped.md",
+        "```",
+      ].join("\n"),
+    );
+    await git(repositoryPath, "add", ".");
+
+    const consumers = await findSnippetConsumers(repositoryPath, [
+      "docs/_snippets/shared.md",
+      "docs/_snippets/internal-alias.md",
+      "docs/_snippets/escaped.md",
+      "docs/_snippets/missing.md",
+    ]);
+
+    expect([...consumers]).toEqual([
+      ["docs/_snippets/shared.md", ["docs/page.md"]],
+    ]);
   });
 });

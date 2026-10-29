@@ -61,3 +61,42 @@ Result: exit 0, 5 test files passed, 43 tests passed, TypeScript compilation com
 - Consumer scanning uses NUL-delimited Git output, includes tracked and untracked `.md` and `.mdx` files, ignores binary or invalid UTF-8 content, and does not read symlink targets.
 - The scanner tracks Markdown fence boundaries so directive examples inside ordinary code fences do not create false consumers.
 - No blocking concerns found. Complex nested inline Markdown can remain unmatched by design, and npm still emits the pre-existing `devdir` configuration warning.
+
+## Findings fixes
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts test/snippets.test.ts
+```
+
+Result: exit 1, 2 test files failed, 5 tests failed, and 8 passed. The failures showed missing snippet paths retained without filesystem verification, internal and escaping symlinks compared lexically, thematic breaks emitted as candidates, intraword underscores stripped, and out-of-range numeric entities throwing `RangeError`.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts test/snippets.test.ts
+```
+
+Result: exit 0, 2 test files passed and 13 tests passed.
+
+Full verification:
+
+```text
+npm test && npm run build && git diff --check
+```
+
+Result: exit 0, 5 test files passed, 47 tests passed, TypeScript compilation completed successfully, and Git reported no whitespace errors.
+
+### Self-review
+
+- The Git root, changed snippet paths, and include targets are now canonicalized with `realpath`. Only existing regular files whose canonical location remains under the canonical root participate in matching.
+- Internal symlink aliases resolve to one canonical repository-relative key. Symlinks that escape the repository, and missing changed paths, are omitted.
+- CommonMark thematic breaks using `*`, `-`, or `_` are discarded before candidate construction. Setext headings retain their existing precedence when a hyphen line follows paragraph text.
+- Underscore emphasis requires non-word boundaries, preserving intraword single and double underscores while still normalizing standalone emphasis.
+- Numeric entities are decoded only for valid Unicode scalar values. Invalid, unsafe, null, surrogate, and out-of-range values remain unchanged, so normalization cannot throw on them.
+- No new blocking concerns found. Complex inline Markdown remains intentionally conservative, and npm still emits the pre-existing `devdir` configuration warning.

@@ -29,8 +29,22 @@ function decodeEntities(source: string): string {
   return source.replace(
     /&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/gi,
     (entity, decimal: string, hexadecimal: string, name: string) => {
-      if (decimal) return String.fromCodePoint(Number(decimal));
-      if (hexadecimal) return String.fromCodePoint(parseInt(hexadecimal, 16));
+      const numericValue = decimal
+        ? Number(decimal)
+        : hexadecimal
+          ? parseInt(hexadecimal, 16)
+          : undefined;
+      if (numericValue !== undefined) {
+        if (
+          !Number.isSafeInteger(numericValue) ||
+          numericValue <= 0 ||
+          numericValue > 0x10ffff ||
+          (numericValue >= 0xd800 && numericValue <= 0xdfff)
+        ) {
+          return entity;
+        }
+        return String.fromCodePoint(numericValue);
+      }
       return named[name.toLowerCase()] ?? entity;
     },
   );
@@ -79,8 +93,16 @@ export function normalizeVisibleText(source: string): string {
     .replace(/<\/?[A-Za-z][^>]*>/g, "")
     .replace(/`+([^`]+?)`+/g, "$1")
     .replace(/\\([\\`*_[\]{}()#+.!|>-])/g, "$1")
-    .replace(/(\*\*|__|~~)(.*?)\1/g, "$2")
-    .replace(/([*_])([^*_\s](?:.*?[^*_\s])?)\1/g, "$2")
+    .replace(/(\*\*|~~)(?=\S)(.+?\S)\1/g, "$2")
+    .replace(
+      /(^|[^\p{L}\p{N}_])__(?=\S)(.+?\S)__(?![\p{L}\p{N}_])/gu,
+      "$1$2",
+    )
+    .replace(/\*(?=\S)(.+?\S)\*/g, "$1")
+    .replace(
+      /(^|[^\p{L}\p{N}_])_(?=\S)(.+?\S)_(?![\p{L}\p{N}_])/gu,
+      "$1$2",
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -115,10 +137,15 @@ function colonDirectiveAt(line: string) {
   return line.match(/^\s*(:{3,})\{([^}]+)\}(?:\s+.*)?$/);
 }
 
+function isThematicBreak(line: string): boolean {
+  return /^ {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/.test(line);
+}
+
 function startsBlock(line: string): boolean {
   return (
     /^\s{0,3}#{1,6}(?:\s+|$)/.test(line) ||
     listItem.test(line) ||
+    isThematicBreak(line) ||
     Boolean(fenceAt(line)) ||
     Boolean(colonDirectiveAt(line))
   );
@@ -130,6 +157,11 @@ export function segmentMarkdown(source: string): SourceBlock[] {
 
   for (let index = 0; index < lines.length; ) {
     if (!lines[index].trim()) {
+      index++;
+      continue;
+    }
+
+    if (isThematicBreak(lines[index])) {
       index++;
       continue;
     }

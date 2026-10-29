@@ -132,6 +132,25 @@ describe("segmentMarkdown", () => {
       '<main data-label="**literal**"> &amp; </main>',
     );
   });
+
+  it("does not emit visible candidates for thematic breaks", () => {
+    const source = [
+      "Before.",
+      "",
+      "---",
+      "",
+      "***",
+      "",
+      "___",
+      "",
+      "After.",
+    ].join("\n");
+
+    expect(segmentMarkdown(source).map(({ text }) => text)).toEqual([
+      "Before.",
+      "After.",
+    ]);
+  });
 });
 
 describe("normalizeVisibleText", () => {
@@ -154,5 +173,24 @@ describe("normalizeVisibleText", () => {
     expect(normalizeVisibleText(source)).toBe(
       "Important Use old formatted text. Visible",
     );
+  });
+
+  it("preserves intraword underscores under CommonMark rules", () => {
+    expect(
+      normalizeVisibleText(
+        "Keep snake_case and before__middle__after, but normalize _emphasis_.",
+      ),
+    ).toBe(
+      "Keep snake_case and before__middle__after, but normalize emphasis.",
+    );
+  });
+
+  it("leaves invalid numeric entities unchanged instead of throwing", () => {
+    expect(() =>
+      normalizeVisibleText("Invalid: &#999999999999; and &#x110000;."),
+    ).not.toThrow();
+    expect(
+      normalizeVisibleText("Invalid: &#999999999999; and &#x110000;."),
+    ).toBe("Invalid: &#999999999999; and &#x110000;.");
   });
 });

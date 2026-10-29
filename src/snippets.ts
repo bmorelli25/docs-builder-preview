@@ -30,17 +30,23 @@ async function normalizeChangedPath(
   root: string,
   changedPath: string,
 ): Promise<string | undefined> {
-  let fullPath = isAbsolute(changedPath)
+  const fullPath = isAbsolute(changedPath)
     ? resolve(changedPath)
     : resolve(root, changedPath);
-  if (isAbsolute(changedPath)) {
-    try {
-      fullPath = await realpath(fullPath);
-    } catch {
-      return undefined;
-    }
+  return canonicalFileWithinRoot(root, fullPath);
+}
+
+async function canonicalFileWithinRoot(
+  root: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    const canonicalPath = await realpath(path);
+    if (!(await lstat(canonicalPath)).isFile()) return undefined;
+    return pathWithinRoot(root, canonicalPath);
+  } catch {
+    return undefined;
   }
-  return pathWithinRoot(root, fullPath);
 }
 
 function includeTargets(source: string): string[] {
@@ -142,9 +148,9 @@ export async function findSnippetConsumers(
   repositoryPath: string,
   snippetPaths: string[],
 ): Promise<Map<string, string[]>> {
-  const root = (
-    await git(repositoryPath, ["rev-parse", "--show-toplevel"])
-  ).trim();
+  const root = await realpath(
+    (await git(repositoryPath, ["rev-parse", "--show-toplevel"])).trim(),
+  );
   const normalizedSnippetPaths = [
     ...new Set(
       (await Promise.all(
@@ -186,7 +192,10 @@ export async function findSnippetConsumers(
       const matched = new Set<string>();
       for (const target of includeTargets(source)) {
         const resolvedTarget = resolve(root, dirname(consumerPath), target);
-        const normalizedTarget = pathWithinRoot(root, resolvedTarget);
+        const normalizedTarget = await canonicalFileWithinRoot(
+          root,
+          resolvedTarget,
+        );
         if (normalizedTarget && consumers.has(normalizedTarget)) {
           matched.add(normalizedTarget);
         }
