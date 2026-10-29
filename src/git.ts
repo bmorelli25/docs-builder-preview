@@ -94,6 +94,11 @@ async function selectBase(
     }
     if (await refExists(repositoryPath, remoteRef)) return remoteRef;
     if (await refExists(repositoryPath, prBase)) return prBase;
+    throw new Error(
+      fetch
+        ? `GitHub PR base could not be resolved after fetch: ${remoteRef}`
+        : `GitHub PR base is not available locally and fetch is disabled: ${remoteRef}`,
+    );
   }
 
   for (const candidate of ["origin/main", "main"]) {
@@ -359,7 +364,7 @@ export async function buildReview(
     [...tracked, ...untracked].map(async (file): Promise<ChangedFile> => {
       const isUntracked = untracked.some(({ path }) => path === file.path);
       const route = sourcePathToRoute(file.path);
-      const diff = isUntracked
+      const parsedDiff = isUntracked
         ? await untrackedDiff(gitRoot, file.path, route !== null)
         : parseZeroContextDiff(
             await git(gitRoot, [
@@ -376,6 +381,8 @@ export async function buildReview(
               file.path,
             ]),
           );
+      const diff =
+        route === null ? { ...parsedDiff, blocks: [] } : parsedDiff;
 
       return {
         ...file,

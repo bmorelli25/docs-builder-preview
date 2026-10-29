@@ -263,6 +263,30 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("retains tracked supporting-file status and stats without Markdown blocks", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docs/navigation.yml", "toc: old\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/navigation.yml",
+      "toc: new\nextra: entry\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(
+      review.files.find(({ path }) => path === "docs/navigation.yml"),
+    ).toMatchObject({
+      status: "modified",
+      route: null,
+      addedLines: 2,
+      deletedLines: 1,
+      blocks: [],
+    });
+  });
+
   it("fetches and honors a GitHub pull request base that is absent locally", async () => {
     const repositoryPath = await createRepository();
     await write(repositoryPath, "README.md", "base\n");
@@ -306,6 +330,29 @@ describe("buildReview", () => {
         )
       ).stdout.trim(),
     ).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("rejects an unresolved GitHub pull request base instead of falling back", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+
+    const remotePath = join(dirname(repositoryPath), "remote.git");
+    await mkdir(remotePath);
+    await git(remotePath, "init", "--bare");
+    await git(repositoryPath, "remote", "add", "origin", remotePath);
+
+    const binPath = join(dirname(repositoryPath), "bin");
+    await mkdir(binPath);
+    const ghPath = join(binPath, "gh");
+    await writeFile(ghPath, "#!/bin/sh\nprintf 'missing-release\\n'\n");
+    await chmod(ghPath, 0o755);
+    vi.stubEnv("PATH", `${binPath}:${process.env.PATH}`);
+
+    await expect(buildReview(repositoryPath)).rejects.toThrow(
+      "GitHub PR base could not be resolved after fetch: origin/missing-release",
+    );
   });
 
   it("detects copies from unchanged source files", async () => {
