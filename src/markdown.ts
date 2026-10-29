@@ -112,6 +112,93 @@ function protectInlineCode(source: string): ProtectedInlineCode {
   };
 }
 
+function isEscaped(source: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && source[cursor] === "\\"; cursor--) {
+    backslashes++;
+  }
+  return backslashes % 2 === 1;
+}
+
+function balancedEnd(
+  source: string,
+  start: number,
+  opening: string,
+  closing: string,
+): number | undefined {
+  let depth = 0;
+  for (let index = start; index < source.length; index++) {
+    if (isEscaped(source, index)) continue;
+    if (source[index] === opening) depth++;
+    if (source[index] === closing && --depth === 0) return index;
+  }
+  return undefined;
+}
+
+function containsWhitespace(source: string): boolean {
+  return /\s/.test(source);
+}
+
+function stripLinkDestinations(source: string): string {
+  let visible = "";
+
+  for (let index = 0; index < source.length; ) {
+    const image = source[index] === "!" && source[index + 1] === "[";
+    const labelStart = image ? index + 1 : index;
+    if (
+      source[labelStart] !== "[" ||
+      isEscaped(source, labelStart)
+    ) {
+      visible += source[index++];
+      continue;
+    }
+
+    const labelEnd = balancedEnd(source, labelStart, "[", "]");
+    if (labelEnd === undefined) {
+      visible += source[index++];
+      continue;
+    }
+
+    const destinationStart = labelEnd + 1;
+    if (source[destinationStart] === "(") {
+      const destinationEnd = balancedEnd(
+        source,
+        destinationStart,
+        "(",
+        ")",
+      );
+      const destination =
+        destinationEnd === undefined
+          ? undefined
+          : source.slice(destinationStart + 1, destinationEnd);
+      if (
+        destinationEnd !== undefined &&
+        destination !== undefined &&
+        !containsWhitespace(destination)
+      ) {
+        visible += source.slice(labelStart + 1, labelEnd);
+        index = destinationEnd + 1;
+        continue;
+      }
+    } else if (source[destinationStart] === "[") {
+      const referenceEnd = balancedEnd(
+        source,
+        destinationStart,
+        "[",
+        "]",
+      );
+      if (referenceEnd !== undefined) {
+        visible += source.slice(labelStart + 1, labelEnd);
+        index = referenceEnd + 1;
+        continue;
+      }
+    }
+
+    visible += source[index++];
+  }
+  return visible;
+}
+
 export function normalizeVisibleText(source: string): string {
   const sourceLines = source.split(/\r?\n/);
   const openingFence = sourceLines[0]?.match(/^\s*(`{3,}|~{3,})(.*)$/);
@@ -152,11 +239,7 @@ export function normalizeVisibleText(source: string): string {
     })
     .join(" ");
 
-  const normalized = decodeEntities(visibleLines)
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
+  const normalized = decodeEntities(stripLinkDestinations(visibleLines))
     .replace(/<((?:https?:\/\/|mailto:)[^>]+)>/g, "$1")
     .replace(/<\/?[A-Za-z][^>]*>/g, "")
     .replace(/\\([\\`*_[\]{}()#+.!|>-])/g, "$1")

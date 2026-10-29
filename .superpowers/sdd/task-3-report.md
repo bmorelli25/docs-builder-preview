@@ -175,3 +175,42 @@ Result: exit 0, 5 test files passed, 50 tests passed, TypeScript compilation com
 - Hashes embedded in words, followed by more heading text, escaped with a backslash, or protected inside inline code remain visible.
 - Trailing spaces after a valid closing sequence are removed with that sequence.
 - No new blocking concerns found. The pre-existing npm `devdir` configuration warning remains.
+
+## Deleted snippets and nested links
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts test/snippets.test.ts
+```
+
+Result: exit 1, 2 test files failed, 3 tests failed, and 15 passed. Missing changed snippet paths were discarded, deleted include targets could not be matched, and nested parentheses left destination fragments visible while malformed links were normalized too aggressively.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/markdown.test.ts test/snippets.test.ts
+```
+
+Result: exit 0, 2 test files passed and 18 tests passed.
+
+Full verification:
+
+```text
+npm test && npm run build && git diff --check
+```
+
+Result: exit 0, 5 test files passed, 52 tests passed, TypeScript compilation completed successfully, and Git reported no whitespace errors.
+
+### Self-review
+
+- Missing changed snippet paths are retained after lexical containment under the canonical Git root. Existing paths still pass through `realpath` and regular-file checks, so symlink escapes remain excluded.
+- Missing include targets are resolved through their nearest existing ancestor. The ancestor is canonicalized before the missing suffix is reapplied, which permits deleted snippets while rejecting paths through symlinked parents outside the repository.
+- Inline links and images now use a scanner with balanced label brackets and destination parentheses. Escapes are respected while balancing, and nested destinations are removed without leaving suffix fragments.
+- Malformed or unbalanced destinations remain unchanged. Bare destinations containing whitespace are also left unchanged rather than risking a false visible-text match.
+- Reference-style links and images retain their visible label or alt text through the same scanner.
+- No new blocking concerns found. Complex destinations with titles are left unmatched conservatively, and npm still emits the pre-existing `devdir` configuration warning.

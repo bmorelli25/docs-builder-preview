@@ -212,6 +212,16 @@ describe("normalizeVisibleText", () => {
     ).toBe("Read the guide, inspect request flow, and run npm test.");
   });
 
+  it("handles balanced nested link destinations conservatively", () => {
+    expect(
+      normalizeVisibleText(
+        "See [API](../fn_(one_(two)).md) and ![flow (dark)](img/flow_(dark).png). Keep [broken](path_(oops).",
+      ),
+    ).toBe(
+      "See API and flow (dark). Keep [broken](path_(oops).",
+    );
+  });
+
   it("removes block syntax, directive options, and inline formatting", () => {
     const source = [
       "## **Important**",

@@ -101,6 +101,7 @@ describe("findSnippetConsumers", () => {
         ["docs/another.md", "docs/guide/page.md"],
       ],
       ["examples/example.ts", ["docs/guide/page.md"]],
+      ["docs/_snippets/missing.md", []],
     ]);
   });
 
@@ -176,6 +177,37 @@ describe("findSnippetConsumers", () => {
 
     expect([...consumers]).toEqual([
       ["docs/_snippets/shared.md", ["docs/page.md"]],
+      ["docs/_snippets/missing.md", []],
+    ]);
+  });
+
+  it("matches deleted snippets while rejecting missing targets through escaping symlink parents", async () => {
+    const repositoryPath = await createRepository();
+    const outsideDirectory = join(dirname(repositoryPath), "outside");
+    await mkdir(outsideDirectory);
+    await mkdir(join(repositoryPath, "docs"), { recursive: true });
+    await symlink(outsideDirectory, join(repositoryPath, "docs", "external"));
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      [
+        "```{include} _snippets/deleted.md",
+        "```",
+        "",
+        "```{include} external/deleted.md",
+        "```",
+      ].join("\n"),
+    );
+    await git(repositoryPath, "add", ".");
+
+    const consumers = await findSnippetConsumers(repositoryPath, [
+      "docs/_snippets/deleted.md",
+      "docs/external/deleted.md",
+    ]);
+
+    expect([...consumers]).toEqual([
+      ["docs/_snippets/deleted.md", ["docs/page.md"]],
+      ["docs/external/deleted.md", []],
     ]);
   });
 });

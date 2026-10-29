@@ -33,7 +33,14 @@ async function normalizeChangedPath(
   const fullPath = isAbsolute(changedPath)
     ? resolve(changedPath)
     : resolve(root, changedPath);
-  return canonicalFileWithinRoot(root, fullPath);
+
+  try {
+    await lstat(fullPath);
+    return canonicalFileWithinRoot(root, fullPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+    return pathWithinRoot(root, fullPath);
+  }
 }
 
 async function canonicalFileWithinRoot(
@@ -47,6 +54,37 @@ async function canonicalFileWithinRoot(
   } catch {
     return undefined;
   }
+}
+
+async function safeIncludeTarget(
+  root: string,
+  path: string,
+): Promise<string | undefined> {
+  if (pathWithinRoot(root, path) === undefined) return undefined;
+
+  try {
+    await lstat(path);
+    return canonicalFileWithinRoot(root, path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+  }
+
+  const suffix: string[] = [path.slice(path.lastIndexOf(sep) + 1)];
+  let ancestor = dirname(path);
+  while (pathWithinRoot(root, ancestor) !== undefined) {
+    try {
+      const canonicalAncestor = await realpath(ancestor);
+      if (!(await lstat(canonicalAncestor)).isDirectory()) return undefined;
+      return pathWithinRoot(root, resolve(canonicalAncestor, ...suffix));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+      suffix.unshift(ancestor.slice(ancestor.lastIndexOf(sep) + 1));
+      const parent = dirname(ancestor);
+      if (parent === ancestor) return undefined;
+      ancestor = parent;
+    }
+  }
+  return undefined;
 }
 
 function includeTargets(source: string): string[] {
@@ -192,10 +230,7 @@ export async function findSnippetConsumers(
       const matched = new Set<string>();
       for (const target of includeTargets(source)) {
         const resolvedTarget = resolve(root, dirname(consumerPath), target);
-        const normalizedTarget = await canonicalFileWithinRoot(
-          root,
-          resolvedTarget,
-        );
+        const normalizedTarget = await safeIncludeTarget(root, resolvedTarget);
         if (normalizedTarget && consumers.has(normalizedTarget)) {
           matched.add(normalizedTarget);
         }
