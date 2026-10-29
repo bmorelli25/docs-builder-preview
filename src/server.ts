@@ -1,0 +1,265 @@
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type ServerResponse,
+} from "node:http";
+import { request as httpsRequest } from "node:https";
+
+import type { DocsBuilderHandle } from "./docs-builder.js";
+import type { ChangedFile, ReviewModel } from "./model.js";
+import { createDashboard } from "./ui/dashboard.js";
+import { createHighlighterScript } from "./ui/highlighter.js";
+import { reviewStyles } from "./ui/styles.js";
+
+export interface ServerOptions {
+  review: ReviewModel;
+  port?: number;
+  upstreamUrl?: string;
+  docsBuilder?: DocsBuilderHandle;
+}
+
+export interface RunningServer {
+  url: string;
+  host: "127.0.0.1";
+  port: number;
+  close(): Promise<void>;
+}
+
+const hopByHopHeaders = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+function safeRequestTarget(rawUrl: string): URL | undefined {
+  if (
+    !rawUrl.startsWith("/") ||
+    rawUrl.startsWith("//") ||
+    /[\u0000-\u001f\u007f]/.test(rawUrl)
+  ) {
+    return undefined;
+  }
+  const rawPath = rawUrl.split(/[?#]/, 1)[0];
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath);
+  } catch {
+    return undefined;
+  }
+  const normalized = decoded.replaceAll("\\", "/");
+  if (
+    normalized.startsWith("//") ||
+    normalized.split("/").some((segment) => segment === "..")
+  ) {
+    return undefined;
+  }
+  try {
+    return new URL(rawUrl, "http://127.0.0.1");
+  } catch {
+    return undefined;
+  }
+}
+
+function send(
+  response: ServerResponse,
+  status: number,
+  body: string,
+  contentType = "text/plain; charset=utf-8",
+) {
+  response.writeHead(status, {
+    "content-type": contentType,
+    "content-length": Buffer.byteLength(body),
+    "x-content-type-options": "nosniff",
+  });
+  response.end(body);
+}
+
+function forwardedHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
+  const result: IncomingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (
+      value !== undefined &&
+      !hopByHopHeaders.has(name.toLowerCase()) &&
+      name.toLowerCase() !== "host" &&
+      name.toLowerCase() !== "accept-encoding"
+    ) {
+      result[name] = value;
+    }
+  }
+  result["accept-encoding"] = "identity";
+  return result;
+}
+
+function injectAssets(html: string, file: ChangedFile | undefined): string {
+  const style = `<style data-docs-review-styles>${reviewStyles}</style>`;
+  const script = `<script data-docs-review-highlighter>${createHighlighterScript(file)}</script>`;
+  const withStyle = /<\/head\s*>/i.test(html)
+    ? html.replace(/<\/head\s*>/i, `${style}</head>`)
+    : `${style}${html}`;
+  return /<\/body\s*>/i.test(withStyle)
+    ? withStyle.replace(/<\/body\s*>/i, `${script}</body>`)
+    : `${withStyle}${script}`;
+}
+
+async function proxyRequest(
+  request: import("node:http").IncomingMessage,
+  response: ServerResponse,
+  target: URL,
+  file: ChangedFile | undefined,
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const transport = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const upstream = transport(
+      target,
+      {
+        method: request.method,
+        headers: forwardedHeaders(request.headers),
+      },
+      (upstreamResponse) => {
+        const contentType = String(
+          upstreamResponse.headers["content-type"] ?? "",
+        ).toLowerCase();
+        const isHtml = contentType.includes("text/html");
+
+        if (!isHtml) {
+          response.writeHead(
+            upstreamResponse.statusCode ?? 502,
+            upstreamResponse.headers,
+          );
+          upstreamResponse.pipe(response);
+          upstreamResponse.once("end", resolve);
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        let length = 0;
+        upstreamResponse.on("data", (chunk: Buffer) => {
+          length += chunk.length;
+          if (length <= 10 * 1024 * 1024) chunks.push(chunk);
+          else upstreamResponse.destroy(new Error("HTML response too large"));
+        });
+        upstreamResponse.once("end", () => {
+          const body = injectAssets(Buffer.concat(chunks).toString("utf8"), file);
+          const headers = { ...upstreamResponse.headers };
+          delete headers["content-length"];
+          delete headers["content-encoding"];
+          delete headers["content-security-policy"];
+          headers["content-length"] = String(Buffer.byteLength(body));
+          response.writeHead(upstreamResponse.statusCode ?? 502, headers);
+          response.end(body);
+          resolve();
+        });
+        upstreamResponse.once("error", (error) => {
+          if (!response.headersSent) send(response, 502, error.message);
+          else response.destroy(error);
+          resolve();
+        });
+      },
+    );
+    upstream.once("error", (error) => {
+      if (!response.headersSent) send(response, 502, `Upstream error: ${error.message}`);
+      else response.destroy(error);
+      resolve();
+    });
+    request.pipe(upstream);
+  });
+}
+
+export async function startReviewServer(
+  options: ServerOptions,
+): Promise<RunningServer> {
+  let upstreamBase: URL;
+  try {
+    const upstreamValue = options.docsBuilder?.url ?? options.upstreamUrl;
+    if (!upstreamValue) throw new Error("A docs-builder upstream is required");
+    upstreamBase = new URL(upstreamValue);
+    if (
+      !["http:", "https:"].includes(upstreamBase.protocol) ||
+      !["127.0.0.1", "localhost", "[::1]"].includes(upstreamBase.hostname) ||
+      upstreamBase.username ||
+      upstreamBase.password
+    ) {
+      throw new Error("The docs-builder upstream must be localhost");
+    }
+  } catch (error) {
+    if (options.docsBuilder?.owned) await options.docsBuilder.stop();
+    throw error;
+  }
+
+  const server = createServer(async (request, response) => {
+    const target = safeRequestTarget(request.url ?? "");
+    if (!target) {
+      send(response, 400, "Invalid request target");
+      return;
+    }
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.setHeader("allow", "GET, HEAD");
+      send(response, 405, "Method not allowed");
+      return;
+    }
+    if (target.pathname === "/" && !target.search) {
+      send(
+        response,
+        200,
+        createDashboard(options.review),
+        "text/html; charset=utf-8",
+      );
+      return;
+    }
+    if (target.pathname === "/api/review") {
+      response.setHeader("cache-control", "no-store");
+      send(
+        response,
+        200,
+        JSON.stringify(options.review),
+        "application/json; charset=utf-8",
+      );
+      return;
+    }
+
+    const upstream = new URL(upstreamBase);
+    upstream.pathname = target.pathname;
+    upstream.search = target.search;
+    const file = options.review.files.find(
+      ({ route }) => route !== null && route === target.pathname,
+    );
+    await proxyRequest(request, response, upstream, file);
+  });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(options.port ?? 4173, "127.0.0.1", resolve);
+    });
+  } catch (error) {
+    if (options.docsBuilder?.owned) await options.docsBuilder.stop();
+    throw error;
+  }
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Review server did not receive a TCP address");
+  }
+  let closed = false;
+  return {
+    host: "127.0.0.1",
+    port: address.port,
+    url: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
+      if (options.docsBuilder?.owned) await options.docsBuilder.stop();
+    },
+  };
+}
