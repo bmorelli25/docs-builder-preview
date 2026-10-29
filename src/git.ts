@@ -340,6 +340,7 @@ function overlaps(
 function semanticChangedBlocks(
   source: string,
   changedRanges: ChangedBlock[],
+  fileIsAdded: boolean,
 ): ChangedBlock[] {
   const semanticBlocks = segmentMarkdown(source);
   const blocks: ChangedBlock[] = semanticBlocks.flatMap((block) => {
@@ -348,11 +349,26 @@ function semanticChangedBlocks(
     );
     if (overlappingRanges.length === 0) return [];
 
+    const fullyCoveredByAdditions = Array.from(
+      { length: block.endLine - block.startLine + 1 },
+      (_, index) => block.startLine + index,
+    ).every((line) =>
+      overlappingRanges.some(
+        (range) =>
+          range.kind === "added" &&
+          range.startLine <= line &&
+          line <= range.endLine,
+      ),
+    );
+
     return [
       {
-        kind: overlappingRanges.some(({ kind }) => kind === "modified")
-          ? "modified"
-          : "added",
+        kind:
+          fileIsAdded ||
+          (!overlappingRanges.some(({ kind }) => kind === "modified") &&
+            fullyCoveredByAdditions)
+            ? "added"
+            : "modified",
         startLine: block.startLine,
         endLine: block.endLine,
         source: block.source,
@@ -449,6 +465,7 @@ export async function buildReview(
               blocks: semanticChangedBlocks(
                 currentSource,
                 parsedDiff.blocks,
+                file.status === "added",
               ),
             }
           : { ...parsedDiff, blocks: [] };

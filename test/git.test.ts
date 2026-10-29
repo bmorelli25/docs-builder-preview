@@ -257,6 +257,57 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("classifies an insertion inside an existing paragraph as modified", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "Existing first line.\nExisting second line.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "Existing first line.\nInserted line.\nExisting second line.\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "modified",
+        startLine: 1,
+        endLine: 3,
+        source:
+          "Existing first line.\nInserted line.\nExisting second line.",
+      },
+    ]);
+  });
+
+  it("classifies a wholly inserted paragraph as added", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docs/page.md", "Existing paragraph.\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "Existing paragraph.\n\nA wholly new\nparagraph.\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "added",
+        startLine: 3,
+        endLine: 4,
+        source: "A wholly new\nparagraph.",
+      },
+    ]);
+  });
+
   it("deduplicates a semantic block touched by adjacent hunks", async () => {
     const repositoryPath = await createRepository();
     await write(
