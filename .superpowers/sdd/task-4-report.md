@@ -158,3 +158,44 @@ Result: exit 0. TypeScript reported no errors and Git reported no whitespace err
 - Generated preview JavaScript subscribes with `EventSource`, reloads only for `refresh`, and closes its stream during page unload.
 - Readiness now requires a 2xx response. Arbitrary 4xx services on the requested port are not reused.
 - Startup checks both `exitCode` and `signalCode`, reporting a terminating signal before the readiness timeout.
+
+## Integrated dashboard fix
+
+### Red
+
+Focused dashboard command:
+
+```text
+npm test -- test/ui.test.ts test/server.test.ts
+```
+
+Result: exit 1, 4 tests failed and 18 passed. The dashboard had no preview iframe, iframe-targeted links, app-shell controls, grouped file sections, status badges, or client-side selection/filter behavior.
+
+### Green
+
+Focused dashboard command:
+
+```text
+npm test -- test/ui.test.ts test/server.test.ts
+```
+
+Result: exit 0, 2 test files passed and 22 tests passed.
+
+Type verification:
+
+```text
+npm run typecheck
+```
+
+Result: exit 0.
+
+### Self-review and visual QA
+
+- `/` now renders a fixed-height review shell with a header, scrollable sidebar, and same-origin `docs-preview` iframe. Links update the iframe without navigating the dashboard.
+- The header shows changed-file and unique preview-URL counts plus the escaped base ref.
+- The sidebar provides labeled search and status controls. Filtering hides nonmatching items and empty groups and displays a no-results state.
+- Files are grouped as previewable pages, snippets and their consumers, deleted pages, and supporting files. Status badges, rename origins, and added/deleted line counts remain visible.
+- Snippet consumer links retain the validated `review-source` query and target the preview iframe.
+- File paths, previous paths, base refs, warnings, routes, search attributes, and accessible labels are HTML-escaped.
+- The dashboard keeps its app-owned SSE refresh subscription.
+- Browser QA confirmed the empty preview state, iframe navigation, selected/current state, desktop shell, scrollable narrow sidebar, and stacked 600-pixel responsive layout.

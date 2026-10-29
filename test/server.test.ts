@@ -125,7 +125,14 @@ describe("startReviewServer", () => {
     expect(server.host).toBe("127.0.0.1");
     const dashboard = await fetch(server.url);
     expect(dashboard.status).toBe(200);
-    expect(await dashboard.text()).toContain("guide.md");
+    const dashboardHtml = await dashboard.text();
+    expect(dashboardHtml).toContain("guide.md");
+    expect(dashboardHtml).toContain(
+      '<iframe name="docs-preview" title="Documentation preview"',
+    );
+    expect(dashboardHtml).toContain('target="docs-preview"');
+    expect(dashboardHtml).toContain('id="review-search"');
+    expect(dashboardHtml).toContain('id="status-filter"');
 
     const api = await fetch(`${server.url}/api/review`);
     expect(api.headers.get("content-type")).toContain("application/json");
