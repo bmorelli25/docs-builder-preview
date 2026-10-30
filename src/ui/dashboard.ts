@@ -5,6 +5,7 @@ import {
   createHighlighterData,
   parentHighlighterScript,
 } from "./highlighter.js";
+import { reviewCheckScript, reviewCheckStyles } from "./review-checks.js";
 
 function escapeHtml(value: string): string {
   return value.replace(
@@ -51,13 +52,27 @@ function itemAttributes(file: ChangedFile, extraSearch = ""): string {
   return `data-review-item data-status="${file.status}" data-search="${escapeHtml(search)}"`;
 }
 
-function pageItem(file: ChangedFile): string {
+function reviewCheckControl(file: ChangedFile, reviewed: boolean): string {
+  return `<label class="review-check" title="Mark as reviewed">
+      <input type="checkbox" data-review-check="${escapeHtml(file.path)}" aria-label="Mark ${escapeHtml(file.path)} as reviewed"${reviewed ? " checked" : ""}>
+    </label>`;
+}
+
+function reviewProgress(reviewed: number, total: number): string {
+  return `<div class="review-progress">
+      <span class="review-progress-count" id="review-progress-count" role="status">${reviewed} of ${total} reviewed</span>
+      <button type="button" class="review-clear" id="clear-review-checks"${reviewed === 0 ? " disabled" : ""}>Clear checks</button>
+    </div>`;
+}
+
+function pageItem(file: ChangedFile, reviewed: boolean): string {
   const href = previewHref(file.route!);
-  return `<li ${itemAttributes(file)}>
+  return `<li ${itemAttributes(file)} data-review-check-item data-reviewed="${reviewed}">
     <a class="review-link" href="${escapeHtml(href)}" target="docs-preview" data-source-file="${escapeHtml(file.path)}">
       ${fileSummary(file)}
       <span class="mapping-status" data-mapping="pending">Not mapped</span>
     </a>
+    ${reviewCheckControl(file, reviewed)}
   </li>`;
 }
 
@@ -94,6 +109,7 @@ function group(
   id: "pages" | "snippets" | "deleted" | "supporting",
   title: string,
   items: string[],
+  lead = "",
 ): string {
   if (items.length === 0) return "";
   return `<section class="review-group" data-review-group="${id}" aria-labelledby="group-${id}">
@@ -101,6 +117,7 @@ function group(
       <h2 id="group-${id}">${title}</h2>
       <span>${items.length}</span>
     </div>
+    ${lead}
     <ul>${items.join("")}</ul>
   </section>`;
 }
@@ -108,6 +125,7 @@ function group(
 export function createDashboard(
   review: ReviewModel,
   docsBuilderStatus: DocsBuilderStatus = { state: "starting", logs: [] },
+  reviewedPaths: ReadonlySet<string> = new Set(),
 ): string {
   const previewable = review.files.filter(
     (file) => file.route && file.status !== "deleted",
@@ -129,7 +147,15 @@ export function createDashboard(
     }
   }
   const groups = [
-    group("pages", "Previewable pages", previewable.map(pageItem)),
+    group(
+      "pages",
+      "Previewable pages",
+      previewable.map((file) => pageItem(file, reviewedPaths.has(file.path))),
+      reviewProgress(
+        previewable.filter((file) => reviewedPaths.has(file.path)).length,
+        previewable.length,
+      ),
+    ),
     group("snippets", "Snippets and consumers", snippets.map(snippetItem)),
     group("deleted", "Deleted pages", deleted.map(staticItem)),
     group("supporting", "Supporting files", supporting.map(staticItem)),
@@ -452,6 +478,7 @@ export function createDashboard(
       .sidebar { max-height: 46vh; border-right: 0; border-bottom: 1px solid #d8dee8; }
     }
   </style>
+  <style>${reviewCheckStyles}</style>
 </head>
 <body>
   <div class="app-shell">
@@ -631,6 +658,7 @@ export function createDashboard(
     }
   </script>
   <script>${parentHighlighterScript}</script>
+  <script>${reviewCheckScript}</script>
 </body>
 </html>`;
 }

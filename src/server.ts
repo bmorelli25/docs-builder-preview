@@ -9,6 +9,7 @@ import {
 import { request as httpsRequest } from "node:https";
 
 import type { ChangedFile, ReviewModel } from "./model.js";
+import { createReviewChecks } from "./review-checks.js";
 import { sourcePathToRoute } from "./routes.js";
 import { createDashboard } from "./ui/dashboard.js";
 import { reviewStyles } from "./ui/styles.js";
@@ -358,6 +359,7 @@ export async function startReviewServer(
   options: ServerOptions,
 ): Promise<RunningServer> {
   let review = options.review;
+  const reviewChecks = createReviewChecks(() => review);
   let docsBuilderStatus = boundedStatus(
     options.docsBuilderStatus ??
       (options.upstreamUrl
@@ -397,6 +399,7 @@ export async function startReviewServer(
       send(response, 400, "Invalid request target");
       return;
     }
+    if (await reviewChecks.handle(request, response, target)) return;
     if (request.method !== "GET" && request.method !== "HEAD") {
       response.setHeader("allow", "GET, HEAD");
       send(response, 405, "Method not allowed");
@@ -406,7 +409,7 @@ export async function startReviewServer(
       send(
         response,
         200,
-        createDashboard(review, docsBuilderStatus),
+        createDashboard(review, docsBuilderStatus, reviewChecks.reviewed()),
         "text/html; charset=utf-8",
       );
       return;
@@ -541,6 +544,7 @@ export async function startReviewServer(
     url: `http://127.0.0.1:${address.port}`,
     setReview: (nextReview) => {
       review = nextReview;
+      reviewChecks.prune(nextReview);
     },
     setDocsBuilderStatus: (nextStatus) => {
       const bounded = boundedStatus(nextStatus);
