@@ -5,6 +5,8 @@ docs-builder preview. The dashboard highlights what changed in the rendered
 pages, tracks which pages you’ve checked, and lets you leave inline edit
 suggestions you can copy for an LLM or a follow-up PR.
 
+<img width="1651" height="1200" alt="Screenshot 2026-10-30 at 1 25 37 PM" src="https://github.com/user-attachments/assets/3983d24e-39dd-433b-a3df-32c23b711ee0" />
+
 ## Requirements
 
 - Node.js 20 or later
