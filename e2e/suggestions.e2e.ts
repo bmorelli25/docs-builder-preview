@@ -154,13 +154,45 @@ test("creates, persists, and exports inline edit suggestions", async ({
       browserPage.frameLocator('iframe[name="docs-preview"]').locator("[data-suggestion-mark]"),
     ).toHaveCount(1);
 
-    await browserPage.locator("#suggestions-copy-all").click();
+    await browserPage.locator("#suggestions-preview").click();
+    const exportModal = browserPage.locator("#suggestions-export-modal");
+    await expect(exportModal).toBeVisible();
+    await expect(browserPage.locator("#suggestions-export-body")).toContainText(
+      "Type: Replace",
+    );
+    await expect(browserPage.locator("#suggestions-export-body")).toContainText(
+      "Kibana prompts you to switch when ready.",
+    );
+    await browserPage.locator("#suggestions-export-copy").click();
     await expect
       .poll(async () => browserPage.evaluate(() => navigator.clipboard.readText()))
       .toContain("Type: Replace");
+    await browserPage.locator("#suggestions-export-close").click();
+    await expect(exportModal).toBeHidden();
+
+    await browserPage.locator("#suggestions-copy-all").click();
     await expect
       .poll(async () => browserPage.evaluate(() => navigator.clipboard.readText()))
       .toContain("Kibana prompts you to switch when ready.");
+
+    const frameAfter = browserPage.frameLocator('iframe[name="docs-preview"]');
+    const mark = frameAfter.locator("[data-suggestion-mark]");
+    await mark.evaluate((element) => {
+      element.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, view: window }),
+      );
+    });
+    const popover = frameAfter.locator(".suggestion-popover");
+    await expect(popover).toBeVisible();
+    await expect(popover.getByRole("button", { name: "Okay" })).toBeVisible();
+    await popover.getByRole("button", { name: "Okay" }).click();
+    await expect(popover).toHaveCount(0);
+
+    await browserPage.locator(".suggestion-item").click();
+    await expect(popover).toBeVisible();
+    await browserPage.waitForTimeout(50);
+    await frameAfter.locator("h1").click();
+    await expect(popover).toHaveCount(0);
 
     browserPage.once("dialog", (dialog) => dialog.accept());
     await browserPage.locator("#suggestions-clear-all").click();
@@ -181,13 +213,16 @@ test("creates, persists, and exports inline edit suggestions", async ({
       });
     await expect(editor).toBeVisible();
     await textarea.fill("Make this sentence shorter.");
-    await editor.getByText("Instruction", { exact: true }).click();
-    await expect(editor).toBeVisible();
-    await textarea.press("Control+Enter");
+    await textarea.press("Control+i");
     await expect(editor).toBeHidden();
     await expect(browserPage.locator(".suggestion-item-kind")).toHaveText(
       "Instruction",
     );
+    await expect(
+      browserPage
+        .frameLocator('iframe[name="docs-preview"]')
+        .locator('[data-suggestion-mark][data-suggestion-kind="instruction"]'),
+    ).toHaveCount(1);
     await expect(browserPage.locator("#suggestions-count")).toHaveText(
       "1 suggestion",
     );

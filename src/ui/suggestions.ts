@@ -16,8 +16,9 @@ export const suggestionPageStyles = `
   border-bottom-color: #dc2626;
 }
 [data-suggestion-mark][data-suggestion-kind="instruction"] {
-  background: rgba(236, 72, 153, .14);
-  border-bottom-color: #db2777;
+  background: rgba(232, 121, 249, .28);
+  border-bottom: 2px dotted #d946ef;
+  box-shadow: inset 0 0 0 1px rgba(217, 70, 239, .35);
 }
 h1 [data-suggestion-mark],
 h2 [data-suggestion-mark],
@@ -64,8 +65,8 @@ h6 [data-suggestion-mark] {
   border: 1px solid #bfdbfe;
 }
 .suggestion-popover[data-kind="instruction"] .suggestion-new {
-  background: #fdf2f8;
-  border-color: #fbcfe8;
+  background: #fdf4ff;
+  border-color: #f0abfc;
 }
 .suggestion-popover[data-kind="delete"] .suggestion-new {
   background: #fef2f2;
@@ -89,6 +90,11 @@ h6 [data-suggestion-mark] {
   border-color: #fca5a5;
   color: #991b1b;
   background: #fef2f2;
+}
+.suggestion-popover button.primary {
+  border-color: #2563eb;
+  color: #fff;
+  background: #2563eb;
 }
 `.trim();
 
@@ -148,6 +154,65 @@ export const suggestionDashboardStyles = `
     .suggestions-actions button:disabled {
       cursor: not-allowed;
       opacity: .5;
+    }
+    .suggestions-export-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgb(15 23 42 / 45%);
+    }
+    .suggestions-export-modal[hidden] { display: none !important; }
+    .suggestions-export-dialog {
+      display: flex;
+      flex-direction: column;
+      width: min(720px, calc(100vw - 48px));
+      max-height: min(80vh, 720px);
+      padding: 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 24px 60px rgb(15 23 42 / 28%);
+      box-sizing: border-box;
+    }
+    .suggestions-export-dialog h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      color: #172033;
+    }
+    .suggestions-export-dialog pre {
+      flex: 1 1 auto;
+      margin: 0 0 12px;
+      padding: 12px;
+      overflow: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #0f172a;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .suggestions-export-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .suggestions-export-actions button {
+      padding: 8px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #fff;
+      color: #172033;
+      font: 600 12px/1.2 system-ui, sans-serif;
+      cursor: pointer;
+    }
+    .suggestions-export-actions button.primary {
+      border-color: #2563eb;
+      color: #fff;
+      background: #2563eb;
     }
     .suggestions-list {
       display: grid;
@@ -302,13 +367,18 @@ export const suggestionScript = `
   const panelList = document.getElementById("suggestions-list");
   const countEl = document.getElementById("suggestions-count");
   const copyAll = document.getElementById("suggestions-copy-all");
+  const previewExport = document.getElementById("suggestions-preview");
   const clearAll = document.getElementById("suggestions-clear-all");
+  const exportModal = document.getElementById("suggestions-export-modal");
+  const exportBody = document.getElementById("suggestions-export-body");
+  const exportCopy = document.getElementById("suggestions-export-copy");
+  const exportClose = document.getElementById("suggestions-export-close");
   const editor = document.getElementById("suggestion-editor");
   const editorText = document.getElementById("suggestion-editor-text");
   const editorMeta = document.getElementById("suggestion-editor-meta");
   const suggestToggle = document.getElementById("suggest-edits");
   const bootstrap = document.getElementById("suggestions-data");
-  if (!preview || !panelList || !countEl || !copyAll || !clearAll || !editor || !editorText || !suggestToggle || !bootstrap) return;
+  if (!preview || !panelList || !countEl || !copyAll || !previewExport || !clearAll || !exportModal || !exportBody || !exportCopy || !exportClose || !editor || !editorText || !suggestToggle || !bootstrap) return;
 
   let suggestions = [];
   try {
@@ -319,9 +389,26 @@ export const suggestionScript = `
 
   let activeQuote = null;
   let editingId = null;
-  let popover = null;
-  let popoverSuggestionId = null;
   let ignoreSelectionUntil = 0;
+  let boundFrameDoc = null;
+  let exportMarkdownCache = "";
+
+  const popoverState = () => {
+    const doc = preview.contentDocument;
+    if (!doc) return { doc: null, popover: null, id: null };
+    return {
+      doc,
+      popover: doc.__docsSuggestionPopover || null,
+      id: doc.__docsSuggestionPopoverId || null,
+    };
+  };
+
+  const setPopoverState = (popover, id) => {
+    const doc = preview.contentDocument;
+    if (!doc) return;
+    doc.__docsSuggestionPopover = popover;
+    doc.__docsSuggestionPopoverId = id;
+  };
 
   const enabled = () => suggestToggle.checked !== false;
 
@@ -344,8 +431,32 @@ export const suggestionScript = `
   const syncButtons = () => {
     const empty = suggestions.length === 0;
     copyAll.disabled = empty;
+    previewExport.disabled = empty;
     clearAll.disabled = empty;
     countEl.textContent = suggestions.length + " suggestion" + (suggestions.length === 1 ? "" : "s");
+  };
+
+  const setSelectedKind = (kind) => {
+    for (const input of editor.querySelectorAll('input[name="suggestion-kind"]')) {
+      input.checked = input.value === kind;
+    }
+  };
+
+  const hideExportModal = () => {
+    exportModal.hidden = true;
+    exportMarkdownCache = "";
+  };
+
+  const showExportModal = async () => {
+    if (!suggestions.length) return;
+    try {
+      exportMarkdownCache = await api("/api/suggestions/export");
+      exportBody.textContent = exportMarkdownCache;
+      exportModal.hidden = false;
+      exportClose.focus();
+    } catch (error) {
+      console.warn("Could not preview suggestions", error);
+    }
   };
 
   const renderPanel = () => {
@@ -447,10 +558,7 @@ export const suggestionScript = `
     editorText.value = existing
       ? (existing.kind === "delete" ? "" : existing.newText)
       : quote.exact;
-    const kind = existing?.kind === "instruction" ? "instruction" : "replace";
-    for (const input of editor.querySelectorAll('input[name="suggestion-kind"]')) {
-      input.checked = input.value === kind;
-    }
+    setSelectedKind(existing?.kind === "instruction" ? "instruction" : "replace");
     editorMeta.textContent = existing ? "Edit suggestion" : "New suggestion";
     positionEditor(rect);
     editorText.focus();
@@ -661,6 +769,11 @@ export const suggestionScript = `
       const mark = doc.createElement("span");
       mark.dataset.suggestionMark = suggestion.id;
       mark.dataset.suggestionKind = suggestion.kind;
+      mark.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        showPopover(mark, suggestion);
+      });
       target.parentNode.insertBefore(mark, target);
       mark.append(target);
       marks.push(mark);
@@ -682,21 +795,41 @@ export const suggestionScript = `
   };
 
   const hidePopover = () => {
+    const doc = preview.contentDocument;
+    const { popover } = popoverState();
+    if (doc?.__docsSuggestionDismiss) {
+      doc.removeEventListener("mousedown", doc.__docsSuggestionDismiss, true);
+      doc.__docsSuggestionDismiss = null;
+    }
     popover?.remove();
-    popover = null;
-    popoverSuggestionId = null;
+    setPopoverState(null, null);
   };
 
   const showPopover = (mark, suggestion) => {
     const doc = preview.contentDocument;
     if (!doc) return;
-    if (popover && popoverSuggestionId === suggestion.id) {
-      hidePopover();
+    const current = popoverState();
+    // Keep an already-open popover for this suggestion. Outside click / Okay closes it.
+    if (current.popover && current.id === suggestion.id && doc.contains(current.popover)) {
       return;
     }
     hidePopover();
-    popoverSuggestionId = suggestion.id;
-    popover = doc.createElement("div");
+    const popover = doc.createElement("div");
+    setPopoverState(popover, suggestion.id);
+    const dismiss = (event) => {
+      // Use nodeType — instanceof Element fails across the iframe boundary.
+      const raw = event.target;
+      const target = raw && raw.nodeType === 1
+        ? raw
+        : raw && raw.nodeType === 3
+          ? raw.parentElement
+          : null;
+      if (!target || typeof target.closest !== "function") return;
+      if (popover.contains(target) || target.closest("[data-suggestion-mark]")) return;
+      hidePopover();
+    };
+    doc.__docsSuggestionDismiss = dismiss;
+    doc.addEventListener("mousedown", dismiss, true);
     popover.className = "suggestion-popover";
     popover.dataset.kind = suggestion.kind;
     const title = doc.createElement("h4");
@@ -749,7 +882,16 @@ export const suggestionScript = `
         console.warn("Could not delete suggestion", error);
       }
     });
-    actions.append(edit, remove);
+    const okay = doc.createElement("button");
+    okay.type = "button";
+    okay.className = "primary";
+    okay.textContent = "Okay";
+    okay.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      hidePopover();
+    });
+    actions.append(edit, remove, okay);
     popover.append(title, original, next, actions);
     (doc.body || doc.documentElement).append(popover);
     const rect = mark.getBoundingClientRect();
@@ -819,42 +961,53 @@ export const suggestionScript = `
     });
   };
 
-  const onFrameClick = (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (!target) return;
+  const eventElement = (event) => {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    for (const node of path) {
+      if (node && node.nodeType === 1) return node;
+    }
+    const raw = event.target;
+    if (raw && raw.nodeType === 1) return raw;
+    if (raw && raw.nodeType === 3) return raw.parentElement;
+    return null;
+  };
+
+  const onFramePointerDown = (event) => {
+    const target = eventElement(event);
+    if (!target || typeof target.closest !== "function") return;
+    // Clicks land in the iframe, not the parent. Cancel editor without saving.
+    if (!editor.hidden && !target.closest(".suggestion-popover")) {
+      cancelEditor();
+    }
+    if (target.closest(".suggestion-popover") || target.closest("[data-suggestion-mark]")) {
+      return;
+    }
     if (target.closest("a[href]")) {
       hidePopover();
       return;
     }
-    const mark = target.closest("[data-suggestion-mark]");
-    if (mark) {
-      event.preventDefault();
-      event.stopPropagation();
-      const suggestion = suggestions.find((item) => item.id === mark.dataset.suggestionMark);
-      if (suggestion) showPopover(mark, suggestion);
-      return;
-    }
-    if (popover && !popover.contains(target)) hidePopover();
+    hidePopover();
   };
 
   const bindFrame = () => {
     const doc = preview.contentDocument;
     if (!doc) return;
-    doc.addEventListener("mousedown", () => {
-      // Clicks land in the iframe, not the parent. Cancel without saving.
-      cancelEditor();
-    }, true);
-    doc.addEventListener("mouseup", () => setTimeout(onSelection, 0));
-    doc.addEventListener("keyup", (event) => {
-      if (event.key === "Shift" || event.key.startsWith("Arrow")) setTimeout(onSelection, 0);
-    });
-    doc.addEventListener("click", onFrameClick, true);
-    doc.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        if (popover) hidePopover();
-        cancelEditor();
-      }
-    });
+    const alreadyBound = doc.documentElement?.dataset.docsSuggestionsBound === "1";
+    boundFrameDoc = doc;
+    if (!alreadyBound) {
+      if (doc.documentElement) doc.documentElement.dataset.docsSuggestionsBound = "1";
+      doc.addEventListener("mousedown", onFramePointerDown, true);
+      doc.addEventListener("mouseup", () => setTimeout(onSelection, 0));
+      doc.addEventListener("keyup", (event) => {
+        if (event.key === "Shift" || event.key.startsWith("Arrow")) setTimeout(onSelection, 0);
+      });
+      doc.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          hidePopover();
+          cancelEditor();
+        }
+      });
+    }
     markPage();
   };
 
@@ -867,6 +1020,14 @@ export const suggestionScript = `
       cancelEditor();
     } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
+      void saveEditor();
+    } else if ((event.key === "i" || event.key === "I") && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      setSelectedKind("instruction");
+      void saveEditor();
+    } else if ((event.key === "r" || event.key === "R") && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      setSelectedKind("replace");
       void saveEditor();
     }
   });
@@ -883,12 +1044,24 @@ export const suggestionScript = `
   });
 
   document.addEventListener("mousedown", (event) => {
-    if (popover && !preview.contains(event.target) && !editor.contains(event.target)) {
+    if (!(event.target instanceof Element)) return;
+    if (exportModal && !exportModal.hidden) {
+      if (event.target === exportModal) hideExportModal();
+      return;
+    }
+    if (!preview.contains(event.target) && !editor.contains(event.target)) {
       hidePopover();
     }
     if (editor.hidden) return;
     if (editor.contains(event.target)) return;
     cancelEditor();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && exportModal && !exportModal.hidden) {
+      event.preventDefault();
+      hideExportModal();
+    }
   });
 
   document.getElementById("suggestion-editor-save")?.addEventListener("click", (event) => {
@@ -900,28 +1073,52 @@ export const suggestionScript = `
     try {
       const markdown = await api("/api/suggestions/export");
       await navigator.clipboard.writeText(markdown);
-      copyAll.textContent = "Copied " + suggestions.length;
+      copyAll.textContent = "Copied";
       setTimeout(() => {
-        copyAll.textContent = "Copy all";
+        copyAll.textContent = "Copy";
       }, 1500);
     } catch (error) {
       console.warn("Could not copy suggestions", error);
-      copyAll.textContent = "Copy failed";
+      copyAll.textContent = "Failed";
       setTimeout(() => {
-        copyAll.textContent = "Copy all";
+        copyAll.textContent = "Copy";
       }, 1500);
     }
   });
 
+  previewExport.addEventListener("click", () => {
+    void showExportModal();
+  });
+
+  exportCopy.addEventListener("click", async () => {
+    try {
+      const markdown = exportMarkdownCache || await api("/api/suggestions/export");
+      await navigator.clipboard.writeText(markdown);
+      exportCopy.textContent = "Copied";
+      setTimeout(() => {
+        exportCopy.textContent = "Copy";
+      }, 1500);
+    } catch (error) {
+      console.warn("Could not copy suggestions", error);
+      exportCopy.textContent = "Failed";
+      setTimeout(() => {
+        exportCopy.textContent = "Copy";
+      }, 1500);
+    }
+  });
+
+  exportClose.addEventListener("click", () => hideExportModal());
+
   clearAll.addEventListener("click", async () => {
     if (!suggestions.length) return;
-    if (!window.confirm("Clear all suggestions?")) return;
+    if (!window.confirm("Clear suggestions?")) return;
     try {
       const state = await api("/api/suggestions/clear", {
         method: "POST",
         body: "{}",
       });
       setSuggestions(state.suggestions);
+      hideExportModal();
     } catch (error) {
       console.warn("Could not clear suggestions", error);
     }
@@ -939,11 +1136,22 @@ export function suggestionsPanelMarkup(suggestions: Suggestion[]): string {
         <span class="suggestions-count" id="suggestions-count">${count} suggestion${count === 1 ? "" : "s"}</span>
       </div>
       <div class="suggestions-actions">
-        <button type="button" class="primary" id="suggestions-copy-all"${count === 0 ? " disabled" : ""}>Copy all</button>
-        <button type="button" id="suggestions-clear-all"${count === 0 ? " disabled" : ""}>Clear all</button>
+        <button type="button" class="primary" id="suggestions-copy-all"${count === 0 ? " disabled" : ""}>Copy</button>
+        <button type="button" id="suggestions-preview"${count === 0 ? " disabled" : ""}>Preview</button>
+        <button type="button" id="suggestions-clear-all"${count === 0 ? " disabled" : ""}>Clear</button>
       </div>
       <div class="suggestions-list" id="suggestions-list"></div>
     </section>
+    <div class="suggestions-export-modal" id="suggestions-export-modal" hidden>
+      <div class="suggestions-export-dialog" role="dialog" aria-modal="true" aria-labelledby="suggestions-export-title">
+        <h3 id="suggestions-export-title">Export preview</h3>
+        <pre id="suggestions-export-body"></pre>
+        <div class="suggestions-export-actions">
+          <button type="button" id="suggestions-export-close">Close</button>
+          <button type="button" class="primary" id="suggestions-export-copy">Copy</button>
+        </div>
+      </div>
+    </div>
     <div class="suggestion-editor" id="suggestion-editor" hidden>
       <div class="suggestion-editor-meta" id="suggestion-editor-meta">New suggestion</div>
       <textarea id="suggestion-editor-text" aria-label="Suggested replacement or instruction"></textarea>
@@ -952,8 +1160,8 @@ export function suggestionsPanelMarkup(suggestions: Suggestion[]): string {
           <label><input type="radio" name="suggestion-kind" value="replace" checked><span>Replace</span></label>
           <label><input type="radio" name="suggestion-kind" value="instruction"><span>Instruction</span></label>
         </div>
-        <button type="button" class="suggestion-editor-save" id="suggestion-editor-save" title="⌘↩ or Ctrl+Enter">Save</button>
+        <button type="button" class="suggestion-editor-save" id="suggestion-editor-save" title="⌘↩ / ⌘R replace · ⌘I instruction">Save</button>
       </div>
-      <p class="suggestion-editor-hint">Replace/Instruction sets the type. Save or press ⌘↩ (Ctrl+Enter) to keep. Escape cancels. Clear the text to delete.</p>
+      <p class="suggestion-editor-hint">⌘R saves as Replace. ⌘I saves as Instruction. ⌘↩ saves current type. Escape cancels. Clear the text to delete.</p>
     </div>`;
 }

@@ -26,14 +26,18 @@ describe("suggestions dashboard markup", () => {
   it("includes the suggestions panel, editor, and toggle", () => {
     const dashboard = createDashboard(review);
     expect(dashboard).toContain('id="suggestions-copy-all"');
+    expect(dashboard).toContain('id="suggestions-preview"');
     expect(dashboard).toContain('id="suggestions-clear-all"');
+    expect(dashboard).toContain('id="suggestions-export-modal"');
     expect(dashboard).toContain('id="suggestion-editor"');
     expect(dashboard).toContain('id="suggest-edits"');
     expect(dashboard).toContain('class="suggestions-slot"');
     expect(dashboard).toContain('id="suggestions-data"');
     expect(dashboard).toContain(suggestionScript);
     expect(dashboard).toContain("Suggest edits");
-    expect(dashboard).toContain("Copy all");
+    expect(dashboard).toContain(">Copy</button>");
+    expect(dashboard).toContain(">Preview</button>");
+    expect(dashboard).toContain(">Clear</button>");
     expect(dashboard).toMatch(
       /<label class="deleted-control" for="suggest-edits">/,
     );
