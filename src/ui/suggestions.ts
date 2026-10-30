@@ -16,8 +16,16 @@ export const suggestionPageStyles = `
   border-bottom-color: #dc2626;
 }
 [data-suggestion-mark][data-suggestion-kind="instruction"] {
-  background: rgba(124, 58, 237, .12);
-  border-bottom-color: #7c3aed;
+  background: rgba(236, 72, 153, .14);
+  border-bottom-color: #db2777;
+}
+h1 [data-suggestion-mark],
+h2 [data-suggestion-mark],
+h3 [data-suggestion-mark],
+h4 [data-suggestion-mark],
+h5 [data-suggestion-mark],
+h6 [data-suggestion-mark] {
+  display: inline;
 }
 .suggestion-popover {
   position: absolute;
@@ -55,6 +63,14 @@ export const suggestionPageStyles = `
   background: #eff6ff;
   border: 1px solid #bfdbfe;
 }
+.suggestion-popover[data-kind="instruction"] .suggestion-new {
+  background: #fdf2f8;
+  border-color: #fbcfe8;
+}
+.suggestion-popover[data-kind="delete"] .suggestion-new {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
 .suggestion-popover .suggestion-actions {
   display: flex;
   gap: 8px;
@@ -83,6 +99,10 @@ export const suggestionDashboardStyles = `
       border: 1px solid #dbe3ef;
       border-radius: 10px;
       background: #fff;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
     }
     .suggestions-panel-header {
       display: flex;
@@ -107,9 +127,11 @@ export const suggestionDashboardStyles = `
       display: flex;
       gap: 6px;
       margin-bottom: 8px;
+      min-width: 0;
     }
     .suggestions-actions button {
-      flex: 1;
+      flex: 1 1 0;
+      min-width: 0;
       padding: 8px 10px;
       border: 1px solid #cbd5e1;
       border-radius: 8px;
@@ -144,7 +166,9 @@ export const suggestionDashboardStyles = `
       line-height: 1.4;
     }
     .suggestion-item {
+      display: block;
       width: 100%;
+      max-width: 100%;
       padding: 8px 9px;
       border: 1px solid #e2e8f0;
       border-radius: 8px;
@@ -152,6 +176,8 @@ export const suggestionDashboardStyles = `
       color: inherit;
       text-align: left;
       cursor: pointer;
+      box-sizing: border-box;
+      overflow: hidden;
     }
     .suggestion-item:hover { background: #eff6ff; border-color: #bfdbfe; }
     .suggestion-item-path {
@@ -473,52 +499,52 @@ export const suggestionScript = `
     }
   };
 
-  const wrapRange = (range, suggestion) => {
-    const mark = preview.contentDocument.createElement("mark");
-    mark.dataset.suggestionMark = suggestion.id;
-    mark.dataset.suggestionKind = suggestion.kind;
-    try {
-      range.surroundContents(mark);
-      return mark;
-    } catch {
-      const fragment = range.extractContents();
-      mark.append(fragment);
-      range.insertNode(mark);
-      return mark;
+  const contentRoot = (doc) =>
+    doc.querySelector("article, main, [role='main']") || doc.body || doc.documentElement;
+
+  const collectTextNodes = (root) => {
+    const nodes = [];
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!node.nodeValue) continue;
+      if (node.parentElement?.closest?.(
+        "script, style, noscript, .suggestion-popover, #pages-nav, nav",
+      )) continue;
+      nodes.push(node);
     }
+    return nodes;
   };
 
-  const clearMarks = () => {
-    const doc = preview.contentDocument;
-    if (!doc) return;
-    for (const mark of [...doc.querySelectorAll("[data-suggestion-mark]")]) {
-      const parent = mark.parentNode;
-      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
-      parent.removeChild(mark);
-      parent.normalize?.();
+  const buildTextIndex = (nodes) => {
+    let haystack = "";
+    const map = [];
+    let pendingSpace = false;
+    for (const textNode of nodes) {
+      const raw = textNode.nodeValue;
+      for (let index = 0; index < raw.length; index++) {
+        if (/\\s/.test(raw[index])) {
+          pendingSpace = haystack.length > 0;
+          continue;
+        }
+        if (pendingSpace) {
+          haystack += " ";
+          map.push({ node: textNode, offset: index });
+          pendingSpace = false;
+        }
+        haystack += raw[index];
+        map.push({ node: textNode, offset: index });
+      }
     }
-    popover?.remove();
-    popover = null;
+    return { haystack, map };
   };
 
   const findQuoteRange = (doc, quote) => {
-    const walker = doc.createTreeWalker(doc.body || doc.documentElement, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    let node;
-    while ((node = walker.nextNode())) {
-      if (!node.nodeValue || !node.nodeValue.trim()) continue;
-      if (node.parentElement?.closest?.("script, style, noscript, .suggestion-popover")) continue;
-      nodes.push(node);
-    }
-    const parts = [];
-    let haystack = "";
-    for (const textNode of nodes) {
-      const value = textNode.nodeValue.replace(/\\s+/g, " ");
-      parts.push({ node: textNode, start: haystack.length, length: value.length });
-      haystack += value;
-    }
+    const root = contentRoot(doc);
+    if (!root) return null;
+    const { haystack, map } = buildTextIndex(collectTextNodes(root));
     const exact = (quote.exact || "").replace(/\\s+/g, " ").trim();
-    if (!exact) return null;
+    if (!exact || !map.length) return null;
     const matches = [];
     let from = 0;
     while (from <= haystack.length) {
@@ -545,30 +571,80 @@ export const suggestionScript = `
     });
     const start = matches[0];
     const end = start + exact.length;
-    const locate = (offset, edge) => {
-      for (const part of parts) {
-        if (offset <= part.start + part.length || part === parts.at(-1)) {
-          const local = Math.min(Math.max(0, offset - part.start), part.node.nodeValue.length);
-          return { node: part.node, offset: local };
-        }
-      }
-      return null;
-    };
-    const startPoint = locate(start, "start");
-    const endPoint = locate(end, "end");
+    const startPoint = map[start];
+    const endPoint = map[Math.min(end, map.length) - 1];
     if (!startPoint || !endPoint) return null;
     const range = doc.createRange();
     range.setStart(startPoint.node, startPoint.offset);
-    range.setEnd(endPoint.node, endPoint.offset);
+    range.setEnd(endPoint.node, endPoint.offset + 1);
     return range;
+  };
+
+  const wrapRange = (range, suggestion) => {
+    const doc = preview.contentDocument;
+    if (!doc) return [];
+    const segments = [];
+    for (const textNode of collectTextNodes(contentRoot(doc))) {
+      if (!textNode.nodeValue) continue;
+      try {
+        if (range.comparePoint(textNode, 0) > 0) continue;
+        if (range.comparePoint(textNode, textNode.nodeValue.length) < 0) continue;
+      } catch {
+        continue;
+      }
+      let start = 0;
+      let end = textNode.nodeValue.length;
+      if (range.startContainer === textNode) start = range.startOffset;
+      else if (range.startContainer.nodeType === Node.TEXT_NODE
+        && range.startContainer.parentElement?.contains(textNode)
+        && range.startContainer !== textNode) {
+        // Text node is fully inside the range.
+      }
+      if (range.endContainer === textNode) end = range.endOffset;
+      if (start >= end) continue;
+      segments.push({ node: textNode, start, end });
+    }
+    const marks = [];
+    for (const segment of segments.reverse()) {
+      let target = segment.node;
+      if (segment.end < target.nodeValue.length) target.splitText(segment.end);
+      if (segment.start > 0) target = target.splitText(segment.start);
+      if (!target.nodeValue) continue;
+      const mark = doc.createElement("span");
+      mark.dataset.suggestionMark = suggestion.id;
+      mark.dataset.suggestionKind = suggestion.kind;
+      target.parentNode.insertBefore(mark, target);
+      mark.append(target);
+      marks.push(mark);
+    }
+    return marks.reverse();
+  };
+
+  const clearMarks = () => {
+    const doc = preview.contentDocument;
+    if (!doc) return;
+    for (const mark of [...doc.querySelectorAll("[data-suggestion-mark]")]) {
+      const parent = mark.parentNode;
+      if (!parent) continue;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize?.();
+    }
+    hidePopover();
+  };
+
+  const hidePopover = () => {
+    popover?.remove();
+    popover = null;
   };
 
   const showPopover = (mark, suggestion) => {
     const doc = preview.contentDocument;
     if (!doc) return;
-    popover?.remove();
+    hidePopover();
     popover = doc.createElement("div");
     popover.className = "suggestion-popover";
+    popover.dataset.kind = suggestion.kind;
     const title = doc.createElement("h4");
     title.textContent = kindLabel(suggestion.kind);
     const original = doc.createElement("div");
@@ -589,14 +665,18 @@ export const suggestionScript = `
       event.stopPropagation();
       const rect = mark.getBoundingClientRect();
       const frame = preview.getBoundingClientRect();
-      openEditor(suggestion.quote, {
+      openEditor({
+        route: suggestion.route,
+        exact: suggestion.quote.exact,
+        prefix: suggestion.quote.prefix,
+        suffix: suggestion.quote.suffix,
+      }, {
         left: frame.left + rect.left,
         top: frame.top + rect.top,
         bottom: frame.top + rect.bottom,
         right: frame.left + rect.right,
       }, suggestion);
-      popover?.remove();
-      popover = null;
+      hidePopover();
     });
     const remove = doc.createElement("button");
     remove.type = "button";
@@ -638,12 +718,7 @@ export const suggestionScript = `
       if (suggestionRoute !== route && suggestion.route !== route) continue;
       const range = findQuoteRange(doc, suggestion.quote);
       if (!range) continue;
-      const mark = wrapRange(range, suggestion);
-      mark.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        showPopover(mark, suggestion);
-      });
+      wrapRange(range, suggestion);
     }
   };
 
@@ -690,12 +765,30 @@ export const suggestionScript = `
     });
   };
 
+  const onFrameClick = (event) => {
+    const mark = event.target instanceof Element
+      ? event.target.closest("[data-suggestion-mark]")
+      : null;
+    if (mark) {
+      event.preventDefault();
+      event.stopPropagation();
+      const suggestion = suggestions.find((item) => item.id === mark.dataset.suggestionMark);
+      if (suggestion) showPopover(mark, suggestion);
+      return;
+    }
+    if (popover && !popover.contains(event.target)) hidePopover();
+  };
+
   const bindFrame = () => {
     const doc = preview.contentDocument;
     if (!doc) return;
     doc.addEventListener("mouseup", () => setTimeout(onSelection, 0));
     doc.addEventListener("keyup", (event) => {
       if (event.key === "Shift" || event.key.startsWith("Arrow")) setTimeout(onSelection, 0);
+    });
+    doc.addEventListener("click", onFrameClick, true);
+    doc.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && popover) hidePopover();
     });
     markPage();
   };
@@ -712,6 +805,7 @@ export const suggestionScript = `
   });
 
   document.addEventListener("mousedown", (event) => {
+    if (popover && !preview.contains(event.target)) hidePopover();
     if (editor.hidden) return;
     if (editor.contains(event.target)) return;
     if (saveOnBlur) void saveEditor();

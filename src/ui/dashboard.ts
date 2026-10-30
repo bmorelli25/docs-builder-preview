@@ -342,6 +342,8 @@ export function createDashboard(
       padding: 12px 14px;
       border-bottom: 1px solid #e2e8f0;
       background: #fff;
+      min-width: 0;
+      overflow: hidden;
     }
     .search-wrap { position: relative; }
     .search-wrap svg {
