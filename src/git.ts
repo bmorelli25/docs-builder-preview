@@ -198,11 +198,13 @@ interface ParsedDiff {
   deletedLines: number;
   blocks: ChangedBlock[];
   deletedHunks: DeletedHunk[];
+  deletionAnchors: number[];
 }
 
 function parseZeroContextDiff(output: string): ParsedDiff {
   const blocks: ChangedBlock[] = [];
   const deletedHunks: DeletedHunk[] = [];
+  const deletionAnchors: number[] = [];
   let addedLines = 0;
   let deletedLines = 0;
   let current:
@@ -230,6 +232,9 @@ function parseZeroContextDiff(output: string): ParsedDiff {
         oldEndLine: current.oldStart + current.deleted.length - 1,
         source: current.deleted.join("\n"),
       });
+      if (current.added.length === 0) {
+        deletionAnchors.push(current.newStart);
+      }
     }
   };
 
@@ -255,7 +260,13 @@ function parseZeroContextDiff(output: string): ParsedDiff {
   }
   finishHunk();
 
-  return { addedLines, deletedLines, blocks, deletedHunks };
+  return {
+    addedLines,
+    deletedLines,
+    blocks,
+    deletedHunks,
+    deletionAnchors,
+  };
 }
 
 async function safeCurrentSource(
@@ -305,6 +316,7 @@ function untrackedDiff(source?: string): ParsedDiff {
       deletedLines: 0,
       blocks: [],
       deletedHunks: [],
+      deletionAnchors: [],
     };
   }
 
@@ -327,6 +339,7 @@ function untrackedDiff(source?: string): ParsedDiff {
             },
           ],
     deletedHunks: [],
+    deletionAnchors: [],
   };
 }
 
@@ -340,14 +353,35 @@ function overlaps(
 function semanticChangedBlocks(
   source: string,
   changedRanges: ChangedBlock[],
+  deletionAnchors: number[],
   fileIsAdded: boolean,
 ): ChangedBlock[] {
   const semanticBlocks = segmentMarkdown(source);
-  const blocks: ChangedBlock[] = semanticBlocks.flatMap((block) => {
+  const anchoredBlockIndexes = new Set<number>();
+  for (const anchor of deletionAnchors) {
+    let nearestIndex: number | undefined;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    semanticBlocks.forEach((block, index) => {
+      const distance =
+        anchor < block.startLine
+          ? block.startLine - anchor
+          : anchor > block.endLine
+            ? anchor - block.endLine
+            : 0;
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+    if (nearestIndex !== undefined) anchoredBlockIndexes.add(nearestIndex);
+  }
+
+  const blocks: ChangedBlock[] = semanticBlocks.flatMap((block, index) => {
     const overlappingRanges = changedRanges.filter((range) =>
       overlaps(block, range),
     );
-    if (overlappingRanges.length === 0) return [];
+    const containsDeletion = anchoredBlockIndexes.has(index);
+    if (overlappingRanges.length === 0 && !containsDeletion) return [];
 
     const fullyCoveredByAdditions = Array.from(
       { length: block.endLine - block.startLine + 1 },
@@ -360,15 +394,18 @@ function semanticChangedBlocks(
           line <= range.endLine,
       ),
     );
+    const hasReplacement = overlappingRanges.some(
+      ({ kind }) => kind === "modified",
+    );
+    const kind =
+      !containsDeletion &&
+      (fileIsAdded || (!hasReplacement && fullyCoveredByAdditions))
+        ? "added"
+        : "modified";
 
     return [
       {
-        kind:
-          fileIsAdded ||
-          (!overlappingRanges.some(({ kind }) => kind === "modified") &&
-            fullyCoveredByAdditions)
-            ? "added"
-            : "modified",
+        kind,
         startLine: block.startLine,
         endLine: block.endLine,
         source: block.source,
@@ -376,9 +413,40 @@ function semanticChangedBlocks(
     ];
   });
 
+  const sourceLines = source.split(/\r?\n/);
   for (const range of changedRanges) {
-    if (!semanticBlocks.some((block) => overlaps(block, range))) {
-      blocks.push(range);
+    let fallbackStart: number | undefined;
+    const finishFallback = (endLine: number) => {
+      if (fallbackStart === undefined) return;
+      let startLine = fallbackStart;
+      while (startLine <= endLine && !sourceLines[startLine - 1]?.trim()) {
+        startLine++;
+      }
+      while (endLine >= startLine && !sourceLines[endLine - 1]?.trim()) {
+        endLine--;
+      }
+      if (startLine <= endLine) {
+        blocks.push({
+          kind: range.kind,
+          startLine,
+          endLine,
+          source: sourceLines.slice(startLine - 1, endLine).join("\n"),
+        });
+      }
+      fallbackStart = undefined;
+    };
+
+    for (let line = range.startLine; line <= range.endLine + 1; line++) {
+      const covered =
+        line <= range.endLine &&
+        semanticBlocks.some(
+          (block) => block.startLine <= line && line <= block.endLine,
+        );
+      if (line <= range.endLine && !covered) {
+        fallbackStart ??= line;
+      } else {
+        finishFallback(line - 1);
+      }
     }
   }
 
@@ -458,17 +526,19 @@ export async function buildReview(
               file.path,
             ]),
           );
+      const { deletionAnchors, ...publicDiff } = parsedDiff;
       const diff =
         isMarkdown && currentSource !== undefined
           ? {
-              ...parsedDiff,
+              ...publicDiff,
               blocks: semanticChangedBlocks(
                 currentSource,
-                parsedDiff.blocks,
+                publicDiff.blocks,
+                deletionAnchors,
                 file.status === "added",
               ),
             }
-          : { ...parsedDiff, blocks: [] };
+          : { ...publicDiff, blocks: [] };
 
       return {
         ...file,

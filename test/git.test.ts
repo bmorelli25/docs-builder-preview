@@ -230,6 +230,35 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("keeps uncovered include syntax from a partially mapped hunk", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/new.md",
+      "Visible paragraph.\n```{include} ../_snippets/shared.md\n```\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "added",
+        startLine: 1,
+        endLine: 1,
+        source: "Visible paragraph.",
+      },
+      {
+        kind: "added",
+        startLine: 2,
+        endLine: 3,
+        source: "```{include} ../_snippets/shared.md\n```",
+      },
+    ]);
+  });
+
   it("selects the full semantic paragraph when one line changes", async () => {
     const repositoryPath = await createRepository();
     await write(
@@ -255,6 +284,44 @@ describe("buildReview", () => {
         source: "A paragraph spans\nan edited second line.",
       },
     ]);
+  });
+
+  it("marks a surviving paragraph modified when a line is deleted", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "First line.\nDeleted middle line.\nLast line.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "First line.\nLast line.\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0]).toMatchObject({
+      addedLines: 0,
+      deletedLines: 1,
+      blocks: [
+        {
+          kind: "modified",
+          startLine: 1,
+          endLine: 2,
+          source: "First line.\nLast line.",
+        },
+      ],
+      deletedHunks: [
+        {
+          oldStartLine: 2,
+          oldEndLine: 2,
+          source: "Deleted middle line.",
+        },
+      ],
+    });
   });
 
   it("classifies an insertion inside an existing paragraph as modified", async () => {
