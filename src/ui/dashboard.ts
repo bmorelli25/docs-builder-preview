@@ -33,15 +33,27 @@ function lineCountLabel(count: number, kind: "added" | "deleted"): string {
   return `${count} ${count === 1 ? "line" : "lines"} ${kind}`;
 }
 
-function fileSummary(file: ChangedFile): string {
+function pathLabel(path: string): string {
+  const slash = path.lastIndexOf("/");
+  const directory = slash === -1 ? "" : path.slice(0, slash + 1);
+  const name = path.slice(slash + 1);
+  return `${directory ? `<span class="file-dir"><bdi>${escapeHtml(directory)}</bdi></span>` : ""}<span class="file-name">${escapeHtml(name)}</span>`;
+}
+
+function copyPathButton(path: string): string {
+  return `<button type="button" class="copy-path" data-copy-path="${escapeHtml(path)}" aria-label="Copy path ${escapeHtml(path)}" title="Copy path">Copy path</button>`;
+}
+
+function fileSummary(file: ChangedFile, copyButton = true): string {
   const previous = file.previousPath
-    ? `<span class="previous-path">from ${escapeHtml(file.previousPath)}</span>`
+    ? `<span class="previous-path" title="${escapeHtml(file.previousPath)}">from ${escapeHtml(file.previousPath)}</span>`
     : "";
   return `<div class="file-summary">
     <div class="file-heading">
-      <span class="file-path">${escapeHtml(file.path)}</span>
+      <span class="file-path" title="${escapeHtml(file.path)}">${pathLabel(file.path)}</span>
       ${previous}
     </div>
+    ${copyButton ? copyPathButton(file.path) : ""}
     <div class="file-meta">
       <span class="status-badge status-${file.status}">${statusLabel(file.status)}</span>
       <span class="diff-stat additions">+${file.addedLines}</span>
@@ -76,9 +88,10 @@ function pageItem(file: ChangedFile, reviewed: boolean): string {
   const tooltip = `${file.path} — ${status} — +${file.addedLines} −${file.deletedLines}`;
   return `<li ${itemAttributes(file)} data-path="${escapeHtml(file.path)}" data-lines-changed="${file.addedLines + file.deletedLines}" data-review-check-item data-reviewed="${reviewed}">
     <a class="review-link" href="${escapeHtml(href)}" target="docs-preview" data-source-file="${escapeHtml(file.path)}" aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(tooltip)}">
-      ${fileSummary(file)}
+      ${fileSummary(file, false)}
       <span class="mapping-status" data-mapping="pending">Not mapped</span>
     </a>
+    ${copyPathButton(file.path)}
     ${reviewCheckControl(file, reviewed)}
   </li>`;
 }
@@ -374,14 +387,45 @@ export function createDashboard(
       background: #eaf1ff;
       box-shadow: inset 3px 0 #2563eb;
     }
-    .file-summary { display: grid; gap: 7px; min-width: 0; }
+    .file-summary { position: relative; display: grid; gap: 7px; min-width: 0; }
     .file-heading { display: grid; gap: 2px; min-width: 0; }
     .file-path {
-      overflow: hidden;
+      display: grid;
+      min-width: 0;
       font: 600 12.5px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .file-dir {
+      direction: rtl;
+      text-align: left;
+      overflow: hidden;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 500;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .file-name { overflow-wrap: anywhere; }
+    .copy-path {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      padding: 2px 7px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      color: #334155;
+      background: #fff;
+      font-size: 11px;
+      cursor: pointer;
+      opacity: 0;
+    }
+    .file-summary > .copy-path { right: 0; bottom: 0; }
+    li:hover > .copy-path,
+    li:hover > .file-summary > .copy-path,
+    .copy-path:focus-visible,
+    .copy-path[data-copied] { opacity: 1; }
+    .copy-path:hover { background: #f1f5f9; }
+    .copy-path[data-copied] { border-color: #86efac; color: #15803d; }
+    .sidebar-collapsed .copy-path { display: none; }
     .previous-path {
       overflow: hidden;
       color: #64748b;
@@ -833,6 +877,41 @@ export function createDashboard(
       applyPageSort();
       applyFilters();
     }
+  </script>
+  <script>
+    (() => {
+      const copyText = async (text) => {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch {
+          const field = document.createElement("textarea");
+          field.value = text;
+          field.setAttribute("readonly", "");
+          field.style.position = "fixed";
+          field.style.opacity = "0";
+          document.body.append(field);
+          field.select();
+          const copied = document.execCommand("copy");
+          field.remove();
+          return copied;
+        }
+      };
+      document.addEventListener("click", async (event) => {
+        const button = event.target instanceof Element && event.target.closest("[data-copy-path]");
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const copied = await copyText(button.dataset.copyPath || "");
+        button.textContent = copied ? "Copied" : "Copy failed";
+        button.dataset.copied = "";
+        clearTimeout(button.copyTimer);
+        button.copyTimer = setTimeout(() => {
+          button.textContent = "Copy path";
+          delete button.dataset.copied;
+        }, 1500);
+      });
+    })();
   </script>
   <script>${parentHighlighterScript}</script>
   <script>${reviewCheckScript}</script>

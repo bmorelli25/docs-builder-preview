@@ -144,6 +144,33 @@ describe("generated browser assets", () => {
     expect(dashboard).toContain('class="warnings"');
   });
 
+  it("keeps the file name visible and offers the full path on hover and copy", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [
+        {
+          ...rootFile,
+          path: "docs/deep/<guide>.md",
+          route: "/docs/deep/guide",
+        },
+      ],
+      warnings: [],
+    };
+
+    const dashboard = createDashboard(review);
+    expect(dashboard).toContain(
+      '<span class="file-path" title="docs/deep/&lt;guide&gt;.md"><span class="file-dir"><bdi>docs/deep/</bdi></span><span class="file-name">&lt;guide&gt;.md</span></span>',
+    );
+    expect(dashboard).toContain(
+      '<button type="button" class="copy-path" data-copy-path="docs/deep/&lt;guide&gt;.md"',
+    );
+    expect(dashboard).toContain("navigator.clipboard.writeText");
+    const link = dashboard.match(/<a class="review-link"[\s\S]*?<\/a>/)?.[0] ?? "";
+    expect(link).not.toContain("copy-path");
+  });
+
   it("targets a same-origin iframe and includes selection and filtering behavior", () => {
     const review: ReviewModel = {
       repositoryPath: "/tmp/repo",
