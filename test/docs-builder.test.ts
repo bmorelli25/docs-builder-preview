@@ -34,6 +34,34 @@ async function availablePort(): Promise<number> {
   return port;
 }
 
+async function runtimeBuilderScript(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "docs-builder-runtime-"));
+  cleanup.push(() => rm(directory, { recursive: true, force: true }));
+  const script = join(directory, "builder.cjs");
+  await writeFile(
+    script,
+    `const http = require("node:http");
+const index = process.argv.indexOf("--port");
+const port = Number(process.argv[index + 1]);
+const server = http.createServer((req, res) => {
+  res.setHeader("content-type", "text/html");
+  if (req.url === "/exit") {
+    res.end("exiting");
+    server.close(() => process.exit(7));
+    return;
+  }
+  if (req.url === "/signal") {
+    res.end("signaling");
+    server.close(() => process.kill(process.pid, "SIGTERM"));
+    return;
+  }
+  res.end("<script src='/__livereloadscript'></script>");
+});
+server.listen(port, "127.0.0.1");`,
+  );
+  return script;
+}
+
 describe("ensureDocsBuilder", () => {
   it("reuses a ready localhost server and never owns it", async () => {
     const server = createServer((_request, response) => {
@@ -297,5 +325,57 @@ setInterval(() => {}, 1000);`,
     ).rejects.toThrow(/aborted/i);
 
     expect(await readFile(stoppedFile, "utf8")).toBe("stopped");
+  });
+
+  it("reports an unexpected post-readiness exit code", async () => {
+    const handle = await ensureDocsBuilder({
+      repositoryPath: process.cwd(),
+      port: await availablePort(),
+      command: process.execPath,
+      args: [await runtimeBuilderScript()],
+      timeoutMs: 4_000,
+    });
+    cleanup.push(handle.stop);
+
+    await fetch(`${handle.url}/exit`);
+    await expect(handle.exit).resolves.toEqual({
+      code: 7,
+      signal: null,
+      intentional: false,
+    });
+  });
+
+  it("reports an unexpected post-readiness signal exit", async () => {
+    const handle = await ensureDocsBuilder({
+      repositoryPath: process.cwd(),
+      port: await availablePort(),
+      command: process.execPath,
+      args: [await runtimeBuilderScript()],
+      timeoutMs: 4_000,
+    });
+    cleanup.push(handle.stop);
+
+    await fetch(`${handle.url}/signal`);
+    await expect(handle.exit).resolves.toEqual({
+      code: null,
+      signal: "SIGTERM",
+      intentional: false,
+    });
+  });
+
+  it("marks an intentional stop without reporting a runtime failure", async () => {
+    const handle = await ensureDocsBuilder({
+      repositoryPath: process.cwd(),
+      port: await availablePort(),
+      command: process.execPath,
+      args: [await runtimeBuilderScript()],
+      timeoutMs: 4_000,
+    });
+
+    await handle.stop();
+    await expect(handle.exit).resolves.toMatchObject({
+      signal: "SIGTERM",
+      intentional: true,
+    });
   });
 });

@@ -376,6 +376,24 @@ export async function runCli(
       info(
         `${docsBuilder.owned ? "Started" : "Using"} docs-builder at ${docsBuilder.url}`,
       );
+      if (docsBuilder.owned && docsBuilder.exit) {
+        void docsBuilder.exit.then((result) => {
+          if (result.intentional || shutdownRequested) return;
+          const detail =
+            result.signal !== null
+              ? `signal ${result.signal}`
+              : `code ${result.code ?? "unknown"}`;
+          const message = `docs-builder exited unexpectedly with ${detail}`;
+          docsState = "failed";
+          docsError = message;
+          warn(message);
+          server.setDocsBuilderStatus({
+            state: "failed",
+            error: message,
+            logs: [...logs],
+          });
+        });
+      }
     } catch (error) {
       if (shutdownRequested) throw error;
       const message = error instanceof Error ? error.message : String(error);

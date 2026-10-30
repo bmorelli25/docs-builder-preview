@@ -342,6 +342,46 @@ git diff --check: exit 0
 
 Concern: the real docs-content smoke test was not rerun during this follow-up.
 
+## Runtime builder-exit monitoring follow-up
+
+Status: DONE
+
+### Behavior
+
+- After an owned docs-builder becomes ready, the CLI monitors its exit promise.
+- An unexpected numeric exit or signal changes dashboard state from `ready` to
+  `failed` with the exact code or signal.
+- Existing bounded builder logs remain attached to the failed state.
+- Changing state to failed clears the upstream URL in the review server, so
+  preview requests return the controlled HTTP 503 response instead of
+  contacting a dead child and returning a stale 502.
+- Dashboard, APIs, SSE, Git watching, and review refresh remain available.
+- Intentional CLI cleanup and shutdown races are ignored by the runtime monitor.
+- Existing unowned docs-builder services have no monitor and remain untouched.
+
+### Deterministic coverage
+
+- Injected code 9 exit updates status, preserves the final stderr line, emits
+  SSE refresh, returns preview 503, and leaves the dashboard available.
+- Injected SIGKILL exit reports the signal in dashboard status.
+- Runtime cleanup still calls an owned handle's stop exactly once.
+- Low-level child tests distinguish unexpected code, unexpected signal, and
+  intentional stop.
+
+### Final verification
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  119 passed (119)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
+Concern: the real docs-content smoke test was not rerun during this follow-up.
+
 The real docs-content smoke test was not rerun in this subtask.
 
 ## Fatal runtime watcher follow-up

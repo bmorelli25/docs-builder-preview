@@ -216,6 +216,62 @@ Build: exit 0
 git diff --check: exit 0
 ```
 
+## Host authority and builder-exit follow-up
+
+Status: DONE
+
+### Red evidence
+
+The focused security and lifecycle tests failed before implementation:
+
+```text
+npm test -- test/server.test.ts test/docs-builder.test.ts test/cli.test.ts
+
+Test Files  3 failed (3)
+Tests  5 failed | 32 passed (37)
+```
+
+The review server accepted `evil.example`, and owned docs-builder handles had
+no post-readiness exit promise.
+
+### Implementation
+
+- Every review request now validates the raw HTTP Host authority before URL,
+  method, dashboard, API, asset, SSE, or proxy handling.
+- Exactly one Host header is required. Its host must be `127.0.0.1`,
+  `localhost`, or `[::1]`, and its explicit port must equal the server's actual
+  listening port after fallback.
+- Missing, duplicated, malformed, external, and wrong-port authorities receive
+  HTTP 400 with no review or repository data.
+- Owned docs-builder handles expose an `exit` promise containing exit code,
+  signal, and whether shutdown was intentional.
+- The intentional flag is set synchronously when `stop()` begins, preventing
+  normal cleanup from being reported as a runtime crash.
+- Reused servers expose no child exit monitor because the CLI does not own
+  their lifecycle.
+
+### Coverage
+
+- Rejected authorities: external hostname, wrong port, malformed authority,
+  and missing Host.
+- Accepted authorities: `127.0.0.1`, `localhost`, and bracketed IPv6 loopback,
+  all on the actual listening port.
+- Owned child exits after readiness with code 7.
+- Owned child exits after readiness from SIGTERM.
+- Intentional SIGTERM resolves with `intentional: true`.
+
+### Final verification
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  119 passed (119)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
 ## Integrated dashboard fix
 
 ### Red

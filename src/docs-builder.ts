@@ -18,7 +18,14 @@ export interface DocsBuilderHandle {
   url: string;
   port: number;
   owned: boolean;
+  exit?: Promise<DocsBuilderExit>;
   stop(): Promise<void>;
+}
+
+export interface DocsBuilderExit {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  intentional: boolean;
 }
 
 const delay = (milliseconds: number) =>
@@ -149,6 +156,12 @@ export async function ensureDocsBuilder(
   child.stderr?.on("data", (chunk: Buffer) => {
     options.onLog?.("stderr", chunk.toString("utf8"));
   });
+  let intentionalStop = false;
+  const exit = new Promise<DocsBuilderExit>((resolve) => {
+    child.once("exit", (code, signal) => {
+      resolve({ code, signal, intentional: intentionalStop });
+    });
+  });
   let spawnError: Error | undefined;
   child.once("error", (error) => {
     spawnError = error;
@@ -158,6 +171,7 @@ export async function ensureDocsBuilder(
   const stop = () => {
     if (stopPromise) return stopPromise;
     stopPromise = (async () => {
+      intentionalStop = true;
       if (child.exitCode !== null || child.signalCode !== null) return;
       child.kill("SIGTERM");
       const exited = await Promise.race([
@@ -203,7 +217,7 @@ export async function ensureDocsBuilder(
           await stop();
           throw new Error("docs-builder startup aborted");
         }
-        return { url, port, owned: true, stop };
+        return { url, port, owned: true, exit, stop };
       }
       await delay(50);
     }

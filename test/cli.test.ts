@@ -268,6 +268,134 @@ describe("runCli", () => {
     expect(stops).toBe(1);
   });
 
+  it("marks an unexpected owned docs-builder exit failed and disables proxying", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const docsPort = await listen(
+      createServer((_request, response) => {
+        response.statusCode = 502;
+        response.end("stale upstream");
+      }),
+    );
+    let resolveExit:
+      | ((result: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+          intentional: boolean;
+        }) => void)
+      | undefined;
+    const exit = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      intentional: boolean;
+    }>((resolve) => {
+      resolveExit = resolve;
+    });
+    let stops = 0;
+    const ensure = async (
+      options: DocsBuilderOptions,
+    ): Promise<DocsBuilderHandle> => {
+      options.onLog?.("stderr", "last builder output\n");
+      return {
+        url: `http://127.0.0.1:${docsPort}`,
+        port: docsPort,
+        owned: true,
+        exit,
+        stop: async () => {
+          stops++;
+        },
+      };
+    };
+    const runtime = await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        port: await unusedPort(),
+        fetch: false,
+        open: false,
+      },
+      { ensureDocsBuilder: ensure },
+    );
+    runtimes.push(runtime);
+    const events = await fetch(`${runtime.url}/api/events`);
+    const reader = events.body!.getReader();
+    await readUntil(reader, "event: connected");
+
+    resolveExit!({ code: 9, signal: null, intentional: false });
+    await readUntil(reader, "event: refresh");
+    await reader.cancel();
+
+    const status = await fetch(`${runtime.url}/api/docs-builder`).then(
+      (response) => response.json(),
+    );
+    expect(status).toMatchObject({
+      state: "failed",
+      error: "docs-builder exited unexpectedly with code 9",
+    });
+    expect(status.logs).toContain("stderr: last builder output");
+    const preview = await fetch(`${runtime.url}/docs/page`);
+    expect(preview.status).toBe(503);
+    expect(await preview.text()).not.toContain("stale upstream");
+    expect((await fetch(runtime.url)).status).toBe(200);
+
+    await runtime.stop();
+    runtimes.pop();
+    expect(stops).toBe(1);
+  });
+
+  it("reports an unexpected owned docs-builder signal exit", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const docsPort = await listen(
+      createServer((_request, response) => response.end("builder")),
+    );
+    let resolveExit:
+      | ((result: {
+          code: number | null;
+          signal: NodeJS.Signals | null;
+          intentional: boolean;
+        }) => void)
+      | undefined;
+    const exit = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      intentional: boolean;
+    }>((resolve) => {
+      resolveExit = resolve;
+    });
+    const runtime = await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        port: await unusedPort(),
+        fetch: false,
+        open: false,
+      },
+      {
+        ensureDocsBuilder: async () => ({
+          url: `http://127.0.0.1:${docsPort}`,
+          port: docsPort,
+          owned: true,
+          exit,
+          stop: async () => {},
+        }),
+      },
+    );
+    runtimes.push(runtime);
+    const events = await fetch(`${runtime.url}/api/events`);
+    const reader = events.body!.getReader();
+    await readUntil(reader, "event: connected");
+
+    resolveExit!({ code: null, signal: "SIGKILL", intentional: false });
+    await readUntil(reader, "event: refresh");
+    await reader.cancel();
+
+    const status = await fetch(`${runtime.url}/api/docs-builder`).then(
+      (response) => response.json(),
+    );
+    expect(status.error).toBe(
+      "docs-builder exited unexpectedly with signal SIGKILL",
+    );
+  });
+
   it("serves a fixture review, attaches snippet consumers, and refreshes after edits", async () => {
     const repositoryPath = await createFixtureRepository();
     const docsPort = await listen(

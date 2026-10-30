@@ -351,6 +351,57 @@ describe("startReviewServer", () => {
     expect(upstream.requests).toEqual([]);
   });
 
+  it("rejects non-loopback, missing, malformed, and wrong-port Host authorities", async () => {
+    const upstream = await fakeUpstream();
+    const server = await start(upstream.url);
+    const requestWithHost = (
+      host: string | undefined,
+    ): Promise<{ status: number; body: string }> =>
+      new Promise((resolve, reject) => {
+        const request = httpRequest(
+          {
+            host: server.host,
+            port: server.port,
+            path: "/api/review",
+            setHost: host !== undefined,
+            headers: host === undefined ? undefined : { host },
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk: Buffer) => chunks.push(chunk));
+            response.once("end", () =>
+              resolve({
+                status: response.statusCode ?? 0,
+                body: Buffer.concat(chunks).toString("utf8"),
+              }),
+            );
+          },
+        );
+        request.once("error", reject);
+        request.end();
+      });
+
+    for (const host of [
+      "evil.example",
+      `127.0.0.1:${server.port + 1}`,
+      `127.0.0.1:${server.port}:80`,
+      undefined,
+    ]) {
+      const response = await requestWithHost(host);
+      expect(response.status, String(host)).toBe(400);
+      expect(response.body).not.toContain("guide.md");
+    }
+    expect(upstream.requests).toEqual([]);
+
+    for (const host of [
+      `127.0.0.1:${server.port}`,
+      `localhost:${server.port}`,
+      `[::1]:${server.port}`,
+    ]) {
+      expect((await requestWithHost(host)).status, host).toBe(200);
+    }
+  });
+
   it("streams upstream SSE without buffering or HTML injection", async () => {
     const upstream = await fakeUpstream();
     const server = await start(upstream.url);

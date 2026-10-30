@@ -58,6 +58,24 @@ function boundedStatus(status: DocsBuilderStatus): DocsBuilderStatus {
   };
 }
 
+function validHostAuthority(
+  request: import("node:http").IncomingMessage,
+  listeningPort: number | undefined,
+): boolean {
+  if (listeningPort === undefined) return false;
+  const hosts: string[] = [];
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase() === "host") {
+      hosts.push(request.rawHeaders[index + 1] ?? "");
+    }
+  }
+  if (hosts.length !== 1) return false;
+  const match = hosts[0].match(
+    /^(?:127\.0\.0\.1|localhost|\[::1\]):([1-9]\d{0,4})$/i,
+  );
+  return match !== null && Number(match[1]) === listeningPort;
+}
+
 const hopByHopHeaders = new Set([
   "connection",
   "keep-alive",
@@ -211,6 +229,7 @@ export async function startReviewServer(
   const eventClients = new Set<ServerResponse>();
   const activeProxyRequests = new Set<ClientRequest>();
   const activeProxyResponses = new Set<IncomingMessage>();
+  let listeningPort: number | undefined;
   const broadcast = (event: string, data: unknown = {}) => {
     const message = sseMessage(event, data);
     let recipients = 0;
@@ -226,6 +245,10 @@ export async function startReviewServer(
   };
 
   const server = createServer(async (request, response) => {
+    if (!validHostAuthority(request, listeningPort)) {
+      send(response, 400, "Invalid Host header");
+      return;
+    }
     const target = safeRequestTarget(request.url ?? "");
     if (!target) {
       send(response, 400, "Invalid request target");
@@ -366,6 +389,7 @@ export async function startReviewServer(
     server.close();
     throw new Error("Review server did not receive a TCP address");
   }
+  listeningPort = address.port;
   let serverClosed = false;
   let activeClose: Promise<void> | undefined;
   return {
