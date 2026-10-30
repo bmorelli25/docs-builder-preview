@@ -1,5 +1,6 @@
 import type { ReviewModel } from "../model.js";
 import { normalizeVisibleText } from "../markdown.js";
+import { wordTokenSource } from "../word-diff.js";
 
 export function safeJson(value: unknown): string {
   return JSON.stringify(value)
@@ -119,6 +120,174 @@ export const parentHighlighterScript = `(() => {
     .trim()
     .toLocaleLowerCase();
   const tokens = (value) => normalize(value).match(/[\\p{L}\\p{N}]+/gu) || [];
+  const wordPattern = ${JSON.stringify(wordTokenSource)};
+  const wordTokens = (value) => [...value.matchAll(new RegExp(wordPattern, "gu"))];
+  const wordKey = (value) => value.normalize("NFKC").toLocaleLowerCase();
+  const isWord = (value) => /[\\p{L}\\p{N}]/u.test(value);
+  const maxAlignmentCells = 250000;
+  const markWordsInPlace = (frameDocument, element, parts) => {
+    const walker = frameDocument.createTreeWalker(element, 4, {
+      acceptNode: (node) => node.parentElement?.closest(
+        ".docs-review-del, .word-diff-panel, .deleted-inline, script, style"
+      ) ? 2 : 1,
+    });
+    const nodes = [];
+    let text = "";
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (text) text += " ";
+      nodes.push({ node, start: text.length });
+      text += node.data;
+    }
+    const rendered = wordTokens(text).map((match) => ({
+      key: wordKey(match[0]),
+      start: match.index,
+      end: match.index + match[0].length,
+    }));
+    const expected = parts.flatMap((part, index) => part.kind === "delete"
+      ? []
+      : wordTokens(part.text).map((match) => ({
+        key: wordKey(match[0]),
+        part: index,
+        word: isWord(match[0]),
+      })));
+    const rows = expected.length + 1;
+    const columns = rendered.length + 1;
+    if (expected.length === 0 || rows * columns > maxAlignmentCells) return false;
+    const table = new Uint32Array(rows * columns);
+    for (let i = expected.length - 1; i >= 0; i--) {
+      for (let j = rendered.length - 1; j >= 0; j--) {
+        table[i * columns + j] = expected[i].key === rendered[j].key
+          ? table[(i + 1) * columns + j + 1] + 1
+          : Math.max(table[(i + 1) * columns + j], table[i * columns + j + 1]);
+      }
+    }
+    const alignment = new Array(expected.length).fill(-1);
+    for (let i = 0, j = 0; i < expected.length && j < rendered.length; ) {
+      if (expected[i].key === rendered[j].key) alignment[i++] = j++;
+      else if (table[(i + 1) * columns + j] >= table[i * columns + j + 1]) i++;
+      else j++;
+    }
+    const equalWords = expected.filter((token) => token.word && parts[token.part].kind === "equal");
+    const alignedEqualWords = equalWords.filter((token) => alignment[expected.indexOf(token)] >= 0);
+    if (
+      expected.some((token, index) =>
+        token.word && parts[token.part].kind === "insert" && alignment[index] < 0) ||
+      alignedEqualWords.length < equalWords.length * 0.8
+    ) {
+      return false;
+    }
+    const locate = (offset, preferEnd) => {
+      const entry = nodes.findLast((candidate) => preferEnd
+        ? candidate.start < offset
+        : candidate.start <= offset);
+      return entry && { node: entry.node, nodeIndex: nodes.indexOf(entry), at: offset - entry.start };
+    };
+    const edits = [];
+    const wrap = (start, end) => {
+      nodes.forEach(({ node, start: nodeStart }, nodeIndex) => {
+        const from = Math.max(start, nodeStart) - nodeStart;
+        const to = Math.min(end, nodeStart + node.data.length) - nodeStart;
+        if (from < to && node.data.slice(from, to).trim()) {
+          edits.push({ node, nodeIndex, at: from, to, kind: "insert" });
+        }
+      });
+    };
+    const deletions = [];
+    let tokenIndex = 0;
+    parts.forEach((part, partIndex) => {
+      if (part.kind === "delete") {
+        deletions.push({ part, before: tokenIndex });
+        return;
+      }
+      const first = tokenIndex;
+      while (tokenIndex < expected.length && expected[tokenIndex].part === partIndex) tokenIndex++;
+      if (part.kind !== "insert") return;
+      let run;
+      for (let index = first; index <= tokenIndex; index++) {
+        const position = index < tokenIndex ? alignment[index] : -1;
+        if (run && position === run.last + 1) {
+          run.last = position;
+          continue;
+        }
+        if (run) wrap(rendered[run.first].start, rendered[run.last].end);
+        run = position >= 0 ? { first: position, last: position } : undefined;
+      }
+    });
+    for (const { part, before } of deletions) {
+      const previousIndex = alignment.slice(0, before).findLast((position) => position >= 0);
+      const nextIndex = alignment.slice(before).find((position) => position >= 0);
+      const anchor = previousIndex !== undefined
+        ? locate(rendered[previousIndex].end, true)
+        : nextIndex !== undefined
+          ? locate(rendered[nextIndex].start, false)
+          : undefined;
+      if (!anchor) return false;
+      edits.push({
+        ...anchor,
+        kind: "delete",
+        text: previousIndex !== undefined
+          ? (part.spaceBefore ? " " : "") + part.text
+          : part.text + (part.spaceAfter ? " " : ""),
+      });
+    }
+    edits.sort((left, right) => left.nodeIndex - right.nodeIndex ||
+      right.at - left.at ||
+      (left.kind === right.kind ? 0 : left.kind === "insert" ? -1 : 1));
+    for (const edit of edits) {
+      if (edit.kind === "insert") {
+        const middle = edit.at > 0 ? edit.node.splitText(edit.at) : edit.node;
+        if (edit.to - edit.at < middle.data.length) middle.splitText(edit.to - edit.at);
+        const inserted = frameDocument.createElement("ins");
+        inserted.className = "docs-review-ins";
+        middle.replaceWith(inserted);
+        inserted.append(middle);
+      } else {
+        const removed = frameDocument.createElement("del");
+        removed.className = "docs-review-del";
+        removed.textContent = edit.text;
+        if (edit.at === 0) {
+          const wrapper = edit.node.parentElement;
+          (wrapper?.classList.contains("docs-review-ins") && wrapper.firstChild === edit.node
+            ? wrapper
+            : edit.node).before(removed);
+        } else {
+          if (edit.at < edit.node.data.length) edit.node.splitText(edit.at);
+          edit.node.after(removed);
+        }
+      }
+    }
+    return true;
+  };
+  const attachWordDiffPanel = (frameDocument, element, parts) => {
+    const panel = frameDocument.createElement("aside");
+    panel.className = "word-diff-panel";
+    const title = frameDocument.createElement("div");
+    title.className = "word-diff-panel-title";
+    title.textContent = "Word changes";
+    const body = frameDocument.createElement("div");
+    parts.forEach((part, index) => {
+      if (index > 0 && !/^[,.;:!?)\\]]/.test(part.text) && !/[(\\[]$/.test(parts[index - 1].text)) {
+        body.append(" ");
+      }
+      const text = part.text.replace(/\uFFFC/g, "…");
+      if (part.kind === "equal") {
+        body.append(text);
+        return;
+      }
+      const word = frameDocument.createElement(part.kind === "insert" ? "ins" : "del");
+      word.className = part.kind === "insert" ? "docs-review-ins" : "docs-review-del";
+      word.textContent = text;
+      body.append(word);
+    });
+    panel.append(title, body);
+    if (element.localName === "tr") element.cells[element.cells.length - 1]?.append(panel);
+    else if (/^(?:li|td|th|dd)$/.test(element.localName)) element.append(panel);
+    else element.insertAdjacentElement("afterend", panel);
+    element.addEventListener("click", (event) => {
+      if (event.target.closest?.("a, .word-diff-panel")) return;
+      panel.classList.toggle("open");
+    });
+  };
   const sourceHref = (file, line) =>
     file.sourceBase + ":" + (Number.isSafeInteger(line) && line > 0 ? line : 1);
   const mappingStatus = (link, matched, unmatched) => {
@@ -142,7 +311,7 @@ export const parentHighlighterScript = `(() => {
   const applyDeletedVisibility = () => {
     const hidden = hideDeleted?.checked === true;
     deletedFallback.hidden = hidden;
-    for (const note of preview.contentDocument?.querySelectorAll(".deleted-inline") || []) {
+    for (const note of preview.contentDocument?.querySelectorAll(".deleted-inline, .docs-review-del") || []) {
       note.hidden = hidden;
     }
   };
@@ -302,6 +471,16 @@ export const parentHighlighterScript = `(() => {
       element.dataset.docsReviewLines = block.startLine + "-" + block.endLine;
       matched.push({ element, block });
     }
+    const wordDiffLines = new Set();
+    for (const { element, block } of matched) {
+      if (!block.wordDiff?.length || !block.previous) continue;
+      element.dataset.docsReviewWordDiff = markWordsInPlace(frameDocument, element, block.wordDiff)
+        ? "inline"
+        : (attachWordDiffPanel(frameDocument, element, block.wordDiff), "panel");
+      for (let line = block.previous.startLine; line <= block.previous.endLine; line++) {
+        wordDiffLines.add(line);
+      }
+    }
     for (const block of unmatched) {
       const item = document.createElement("li");
       item.textContent = "Lines " + block.startLine + "-" + block.endLine + ": " + block.source;
@@ -309,6 +488,10 @@ export const parentHighlighterScript = `(() => {
     }
     unmatchedPanel.hidden = unmatched.length === 0;
     for (const hunk of file.deletedHunks || []) {
+      const shownAsWords = hunk.source.split("\\n").every((line, index) =>
+        !line.trim() || wordDiffLines.has(hunk.oldStartLine + index)
+      );
+      if (shownAsWords) continue;
       const note = frameDocument.createElement("aside");
       note.className = "deleted-inline";
       note.textContent = "Deleted lines " + hunk.oldStartLine + "-" +

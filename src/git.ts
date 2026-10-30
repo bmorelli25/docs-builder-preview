@@ -14,10 +14,12 @@ import type {
 import { loadDocsetSubstitutions } from "./docset.js";
 import {
   frontmatterEndLine,
+  normalizeVisibleText,
   segmentMarkdown,
   type SourceBlock,
 } from "./markdown.js";
 import { sourcePathToRoute } from "./routes.js";
+import { diffWords } from "./word-diff.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -208,18 +210,27 @@ function parseNameStatus(output: string): NameStatus[] {
   return files;
 }
 
+interface Hunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+}
+
 interface ParsedDiff {
   addedLines: number;
   deletedLines: number;
   blocks: ChangedBlock[];
   deletedHunks: DeletedHunk[];
   deletionAnchors: number[];
+  hunks: Hunk[];
 }
 
 function parseZeroContextDiff(output: string): ParsedDiff {
   const blocks: ChangedBlock[] = [];
   const deletedHunks: DeletedHunk[] = [];
   const deletionAnchors: number[] = [];
+  const hunks: Hunk[] = [];
   let addedLines = 0;
   let deletedLines = 0;
   let current:
@@ -233,6 +244,12 @@ function parseZeroContextDiff(output: string): ParsedDiff {
 
   const finishHunk = () => {
     if (!current) return;
+    hunks.push({
+      oldStart: current.oldStart,
+      oldCount: current.deleted.length,
+      newStart: current.newStart,
+      newCount: current.added.length,
+    });
     if (current.added.length > 0) {
       blocks.push({
         kind: current.deleted.length > 0 ? "modified" : "added",
@@ -282,6 +299,7 @@ function parseZeroContextDiff(output: string): ParsedDiff {
     blocks,
     deletedHunks,
     deletionAnchors,
+    hunks,
   };
 }
 
@@ -333,6 +351,7 @@ function untrackedDiff(source?: string): ParsedDiff {
       blocks: [],
       deletedHunks: [],
       deletionAnchors: [],
+      hunks: [],
     };
   }
 
@@ -356,6 +375,7 @@ function untrackedDiff(source?: string): ParsedDiff {
           ],
     deletedHunks: [],
     deletionAnchors: [],
+    hunks: [],
   };
 }
 
@@ -415,11 +435,13 @@ async function expandIncludes(
   return expanded.flat();
 }
 
+type BodyDiff = Pick<ParsedDiff, "blocks" | "deletedHunks" | "deletionAnchors">;
+
 function splitFrontmatterChanges(
   source: string,
-  diff: Omit<ParsedDiff, "addedLines" | "deletedLines">,
+  diff: BodyDiff,
   fileIsAdded: boolean,
-): Omit<ParsedDiff, "addedLines" | "deletedLines"> & {
+): BodyDiff & {
   frontmatter?: FrontmatterChange;
 } {
   const end = frontmatterEndLine(source);
@@ -661,6 +683,133 @@ function semanticChangedBlocks(
   );
 }
 
+/** Merge-base lines for a current line: one line, a replaced range, or none. */
+function previousLineRange(
+  hunks: Hunk[],
+  line: number,
+): [number, number] | undefined {
+  let delta = 0;
+  for (const hunk of hunks) {
+    if (hunk.newCount > 0) {
+      if (line < hunk.newStart) break;
+      if (line < hunk.newStart + hunk.newCount) {
+        return hunk.oldCount > 0
+          ? [hunk.oldStart, hunk.oldStart + hunk.oldCount - 1]
+          : undefined;
+      }
+    } else if (line <= hunk.newStart) {
+      break;
+    }
+    const oldNext = hunk.oldStart + Math.max(hunk.oldCount, 1);
+    const newNext = hunk.newStart + Math.max(hunk.newCount, 1);
+    delta = oldNext - newNext;
+  }
+  return [line + delta, line + delta];
+}
+
+/** Pairs below both bars are rewrites; a word diff of them is mostly noise. */
+const minimumWordDiffSimilarity = 0.25;
+const minimumExpansionOverlap = 0.75;
+
+/**
+ * Pairs each modified block with the merge-base blocks its lines replaced and
+ * diffs their visible text. A merge-base block pairs with at most one current
+ * block, so a row split into two rows diffs against only the closer one.
+ */
+function attachWordDiffs(
+  blocks: ChangedBlock[],
+  hunks: Hunk[],
+  previousSource: string,
+  substitutions: Record<string, string>,
+): ChangedBlock[] {
+  const previousBlocks = segmentMarkdown(previousSource);
+  const previousLines = previousSource.split(/\r?\n/);
+  const visible = (source: string) => normalizeVisibleText(source, substitutions);
+  const options: {
+    blockIndex: number;
+    group: SourceBlock[];
+    diff: NonNullable<ReturnType<typeof diffWords>>;
+  }[] = [];
+  blocks.forEach((block, blockIndex) => {
+    if (
+      block.kind !== "modified" ||
+      block.container ||
+      block.appliesTo ||
+      block.imageAlt !== undefined ||
+      /\{(?:literal)?include\}/.test(block.source)
+    ) {
+      return;
+    }
+    let first = Number.POSITIVE_INFINITY;
+    let last = Number.NEGATIVE_INFINITY;
+    for (let line = block.startLine; line <= block.endLine; line++) {
+      const range = previousLineRange(hunks, line);
+      if (!range) continue;
+      first = Math.min(first, range[0]);
+      last = Math.max(last, range[1]);
+    }
+    const overlapping = previousBlocks.filter(
+      (candidate) => candidate.startLine <= last && first <= candidate.endLine,
+    );
+    const newText = visible(block.source);
+    if (overlapping.length === 0 || !newText) return;
+    const groups = overlapping.map((candidate) => [candidate]);
+    if (overlapping.length > 1) groups.push(overlapping);
+    for (const group of groups) {
+      const diff = diffWords(
+        group.map((candidate) => visible(candidate.source)).join(" "),
+        newText,
+      );
+      if (
+        diff &&
+        (diff.similarity >= minimumWordDiffSimilarity ||
+          diff.overlap >= minimumExpansionOverlap)
+      ) {
+        options.push({ blockIndex, group, diff });
+      }
+    }
+  });
+
+  const result = [...blocks];
+  const claimedBlocks = new Set<number>();
+  const claimedPrevious = new Set<SourceBlock>();
+  options.sort((left, right) => right.diff.similarity - left.diff.similarity);
+  for (const { blockIndex, group, diff } of options) {
+    if (
+      claimedBlocks.has(blockIndex) ||
+      group.some((candidate) => claimedPrevious.has(candidate))
+    ) {
+      continue;
+    }
+    claimedBlocks.add(blockIndex);
+    for (const candidate of group) claimedPrevious.add(candidate);
+    const startLine = group[0].startLine;
+    const endLine = group.at(-1)!.endLine;
+    result[blockIndex] = {
+      ...blocks[blockIndex],
+      previous: {
+        startLine,
+        endLine,
+        source: previousLines.slice(startLine - 1, endLine).join("\n"),
+      },
+      wordDiff: diff.parts,
+    };
+  }
+  return result;
+}
+
+async function previousMarkdownSource(
+  gitRoot: string,
+  mergeBase: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    return await git(gitRoot, ["show", `${mergeBase}:${path}`]);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function buildReview(
   repositoryPath: string,
   baseOverride?: string,
@@ -741,8 +890,8 @@ export async function buildReview(
               file.path,
             ]),
           );
-      const { deletionAnchors, ...publicDiff } = parsedDiff;
-      let diff: Omit<ParsedDiff, "deletionAnchors"> & {
+      const { deletionAnchors, hunks, ...publicDiff } = parsedDiff;
+      let diff: Omit<ParsedDiff, "deletionAnchors" | "hunks"> & {
         frontmatter?: FrontmatterChange;
       };
       if (isMarkdown && currentSource !== undefined) {
@@ -751,6 +900,20 @@ export async function buildReview(
           parsedDiff,
           file.status === "added",
         );
+        const changedBlocks = semanticChangedBlocks(
+          currentSource,
+          split.blocks,
+          split.deletionAnchors,
+          file.status === "added",
+        );
+        const previousSource =
+          isUntracked || file.status === "added"
+            ? undefined
+            : await previousMarkdownSource(
+                gitRoot,
+                mergeBase,
+                file.previousPath ?? file.path,
+              );
         diff = {
           addedLines: parsedDiff.addedLines,
           deletedLines: parsedDiff.deletedLines,
@@ -758,12 +921,14 @@ export async function buildReview(
           blocks: await expandIncludes(
             gitRoot,
             file.path,
-            semanticChangedBlocks(
-              currentSource,
-              split.blocks,
-              split.deletionAnchors,
-              file.status === "added",
-            ),
+            previousSource === undefined
+              ? changedBlocks
+              : attachWordDiffs(
+                  changedBlocks,
+                  hunks,
+                  previousSource,
+                  substitutions,
+                ),
           ),
           ...(split.frontmatter && { frontmatter: split.frontmatter }),
         };

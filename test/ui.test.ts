@@ -8,6 +8,7 @@ import {
   parentHighlighterScript,
 } from "../src/ui/highlighter.js";
 import { reviewStyles } from "../src/ui/styles.js";
+import { wordTokenSource } from "../src/word-diff.js";
 
 const rootFile: ChangedFile = {
   path: "index.md",
@@ -547,6 +548,54 @@ describe("generated browser assets", () => {
     expect(parentHighlighterScript).not.toContain("__maliciousDocsScript");
     expect(parentHighlighterScript).not.toContain("eval(");
     expect(parentHighlighterScript).not.toContain("new Function");
+  });
+
+  it("marks word diffs with DOM APIs and the server's tokenizer", () => {
+    expect(parentHighlighterScript).toContain(
+      `const wordPattern = ${JSON.stringify(wordTokenSource)};`,
+    );
+    expect(parentHighlighterScript).toContain('createElement("ins")');
+    expect(parentHighlighterScript).toContain('createElement("del")');
+    expect(parentHighlighterScript).toContain("removed.textContent = edit.text");
+    expect(parentHighlighterScript).toContain(
+      '".deleted-inline, .docs-review-del"',
+    );
+    expect(parentHighlighterScript).not.toContain("innerHTML");
+    expect(parentHighlighterScript).not.toContain("insertAdjacentHTML");
+    expect(reviewStyles).toContain("ins.docs-review-ins");
+    expect(reviewStyles).toContain("del.docs-review-del[hidden]");
+    expect(reviewStyles).toContain(".word-diff-panel");
+  });
+
+  it("passes word diffs through to the browser with their previous lines", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      warnings: [],
+      files: [{
+        ...rootFile,
+        blocks: [{
+          kind: "modified",
+          startLine: 3,
+          endLine: 3,
+          source: "Kibana might </script> prompt",
+          previous: { startLine: 3, endLine: 3, source: "Kibana will prompt" },
+          wordDiff: [
+            { kind: "equal", text: "Kibana" },
+            { kind: "delete", text: "will", spaceBefore: true, spaceAfter: true },
+            { kind: "insert", text: "might </script>" },
+            { kind: "equal", text: "prompt" },
+          ],
+        }],
+      }],
+    };
+    const data = createHighlighterData(review);
+    expect(data).not.toContain("</script>");
+    expect(JSON.parse(data).files[0].blocks[0]).toMatchObject({
+      previous: { startLine: 3, endLine: 3 },
+      wordDiff: review.files[0].blocks[0].wordDiff,
+    });
   });
 
   it("exports distinct added and modified highlight styles", () => {

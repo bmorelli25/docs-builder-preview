@@ -19,7 +19,15 @@ export interface ChangedBlock {
   container?: { neighborSource: string; title?: string };
   /** For image `:alt:` option lines, the raw alt text. */
   imageAlt?: string;
+  /** For modified blocks, the merge-base lines this block replaced. */
+  previous?: { startLine: number; endLine: number; source: string };
+  /** Word-level diff of the previous visible text against the current one. */
+  wordDiff?: WordDiffPart[];
 }
+
+export type WordDiffPart =
+  | { kind: "equal" | "insert"; text: string }
+  | { kind: "delete"; text: string; spaceBefore: boolean; spaceAfter: boolean };
 
 export interface DeletedHunk {
   oldStartLine: number;

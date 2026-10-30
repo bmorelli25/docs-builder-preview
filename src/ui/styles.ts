@@ -17,6 +17,50 @@ label[data-docs-review-tab="modified"] {
   outline: 2px solid #ca8a04;
   outline-offset: -2px;
 }
+ins.docs-review-ins {
+  color: inherit;
+  background: rgba(34, 197, 94, .38);
+  text-decoration: underline 2px #15803d;
+  text-underline-offset: 2px;
+  border-radius: 2px;
+}
+del.docs-review-del {
+  color: #991b1b;
+  background: rgba(220, 38, 38, .14);
+  text-decoration: line-through 2px #dc2626;
+  border-radius: 2px;
+}
+del.docs-review-del[hidden] {
+  display: none !important;
+}
+[data-docs-review-word-diff="panel"] {
+  cursor: help;
+}
+.word-diff-panel {
+  display: none;
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid #ca8a04;
+  border-radius: 4px;
+  color: #172033;
+  background: #fffbeb;
+  font: 13px/1.5 system-ui, sans-serif;
+  white-space: normal;
+  cursor: auto;
+}
+.word-diff-panel.open,
+.word-diff-panel:hover,
+[data-docs-review-word-diff="panel"]:hover > .word-diff-panel,
+[data-docs-review-word-diff="panel"]:hover + .word-diff-panel,
+tr[data-docs-review-word-diff="panel"]:hover .word-diff-panel {
+  display: block;
+}
+.word-diff-panel-title {
+  margin-bottom: 2px;
+  font: 600 11px/1.4 system-ui, sans-serif;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
 tr[data-docs-review-mark] > td,
 tr[data-docs-review-mark] > th {
   background: transparent !important;

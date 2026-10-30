@@ -2,8 +2,10 @@ import { createServer, type Server } from "node:http";
 
 import { expect, test } from "@playwright/test";
 
+import { normalizeVisibleText } from "../src/markdown.js";
 import type { ReviewModel } from "../src/model.js";
 import { startReviewServer } from "../src/server.js";
+import { diffWords } from "../src/word-diff.js";
 
 async function listen(server: Server): Promise<string> {
   await new Promise<void>((resolve) =>
@@ -552,6 +554,164 @@ test("follows docs navigation inside the preview", async ({ page }) => {
         .frame({ name: "docs-preview" })!
         .evaluate(() => window.__docsNavScriptExecuted),
     ).toBeUndefined();
+  } finally {
+    await cleanup(reviewServer, upstream);
+  }
+});
+
+test("marks changed words inside modified blocks", async ({ page }) => {
+  const upstream = createServer((request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    if (request.url === "/words") {
+      response.end(`<!doctype html><html><body><main><h1>Words</h1>
+        <p>Kibana might prompt you to <a href="/target">switch to <strong>Agent Builder</strong></a> now.</p>
+        <table><tbody><tr><td>AI Assistant</td><td>✅ (deprecated in 9.4)</td></tr></tbody></table>
+        <p>Rendered sentence stays here.</p>
+        </main></body></html>`);
+      return;
+    }
+    if (request.url === "/target") {
+      response.end("<html><body><main><h1>Target page</h1></main></body></html>");
+      return;
+    }
+    response.statusCode = 404;
+    response.end("missing");
+  });
+  const upstreamUrl = await listen(upstream);
+  const substitutions = { kib: "Kibana" };
+  const modified = (
+    line: number,
+    previous: string,
+    source: string,
+  ): ReviewModel["files"][number]["blocks"][number] => ({
+    kind: "modified",
+    startLine: line,
+    endLine: line,
+    source,
+    previous: { startLine: line, endLine: line, source: previous },
+    wordDiff: diffWords(
+      normalizeVisibleText(previous, substitutions),
+      normalizeVisibleText(source, substitutions),
+    )!.parts,
+  });
+  const review: ReviewModel = {
+    repositoryPath: "/tmp/repo",
+    baseRef: "main",
+    mergeBase: "abc",
+    substitutions,
+    warnings: [],
+    files: [{
+      path: "docs/words.md",
+      status: "modified",
+      route: "/words",
+      addedLines: 3,
+      deletedLines: 3,
+      blocks: [
+        modified(
+          3,
+          "{{kib}} will prompt you to [use **Agent Builder**](/target.md) now.",
+          "{{kib}} might prompt you to [switch to **Agent Builder**](/target.md) now.",
+        ),
+        modified(
+          5,
+          "| AI Assistant | ✅ (deprecated) |",
+          "| AI Assistant | ✅ (deprecated in 9.4) |",
+        ),
+        {
+          kind: "modified",
+          startLine: 7,
+          endLine: 7,
+          source: "Rendered sentence stays here.",
+          previous: { startLine: 7, endLine: 7, source: "Rendered sentence was here." },
+          wordDiff: [
+            { kind: "equal", text: "Rendered sentence" },
+            { kind: "delete", text: "was", spaceBefore: true, spaceAfter: true },
+            { kind: "insert", text: "unrendered" },
+            { kind: "equal", text: "here." },
+          ],
+        },
+      ],
+      deletedHunks: [3, 5, 7].map((line) => ({
+        oldStartLine: line,
+        oldEndLine: line,
+        newAnchorLine: line,
+        source: `old line ${line}`,
+      })),
+    }],
+  };
+  let reviewServer:
+    | Awaited<ReturnType<typeof startReviewServer>>
+    | undefined;
+  try {
+    reviewServer = await startReviewServer({ review, port: 0, upstreamUrl });
+    await page.goto(reviewServer.url);
+    await page.locator('a[href="/words"]').click();
+    const preview = page.frameLocator('iframe[name="docs-preview"]');
+    await expect(page.locator("#mapping-counts")).toHaveText(
+      "3 matched · 0 unmatched",
+    );
+
+    const paragraph = preview.locator('p[data-docs-review-word-diff="inline"]');
+    await expect(paragraph).toHaveAttribute("data-docs-review-mark", "modified");
+    await expect(paragraph.locator("ins.docs-review-ins")).toHaveText([
+      "might",
+      "switch to",
+    ]);
+    await expect(paragraph.locator("del.docs-review-del")).toHaveText([
+      " will",
+      " use",
+    ]);
+    await expect(paragraph.locator("del.docs-review-del").first()).toHaveCSS(
+      "text-decoration-line",
+      "line-through",
+    );
+    await expect(paragraph.locator("ins.docs-review-ins").first()).toHaveCSS(
+      "text-decoration-line",
+      "underline",
+    );
+    const link = paragraph.getByRole("link", { name: "switch to Agent Builder" });
+    await expect(link).toHaveAttribute("href", "/target");
+    await expect(link.locator("strong")).toHaveText("Agent Builder");
+    await expect(link.locator("ins.docs-review-ins")).toHaveText("switch to");
+
+    const row = preview.locator('tr[data-docs-review-word-diff="inline"]');
+    await expect(row.locator("ins.docs-review-ins")).toHaveText(["in 9.4"]);
+    await expect(row.locator("td").nth(1)).toHaveText("✅ (deprecated in 9.4)");
+
+    const fallback = preview.locator('p[data-docs-review-word-diff="panel"]');
+    await expect(fallback).toHaveText("Rendered sentence stays here.");
+    const panel = preview.locator(".word-diff-panel");
+    await expect(panel).toBeHidden();
+    await fallback.click();
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("ins.docs-review-ins")).toHaveText("unrendered");
+    await expect(panel.locator("del.docs-review-del")).toHaveText("was");
+
+    await expect(preview.locator(".deleted-inline")).toHaveCount(0);
+
+    const hideDeleted = page.getByLabel("Hide deleted lines");
+    await hideDeleted.check();
+    await expect(preview.locator("del.docs-review-del")).toHaveCount(3);
+    for (const deleted of await preview.locator("del.docs-review-del").all()) {
+      await expect(deleted).toBeHidden();
+    }
+    expect(
+      await paragraph.evaluate((element) => (element as HTMLElement).innerText),
+    ).toBe("Kibana might prompt you to switch to Agent Builder now.");
+    await expect(preview.locator("ins.docs-review-ins").first()).toBeVisible();
+    await hideDeleted.uncheck();
+    await expect(paragraph.locator("del.docs-review-del").first()).toBeVisible();
+
+    const openSource = page.locator("#open-source");
+    await expect(openSource).toHaveAttribute("href", /:3$/);
+    await page.locator("#review-next").click();
+    await expect(openSource).toHaveAttribute("href", /:5$/);
+    await page.locator("#review-previous").click();
+    await expect(openSource).toHaveAttribute("href", /:3$/);
+
+    await link.click();
+    await expect(preview.getByRole("heading", { name: "Target page" }))
+      .toBeVisible();
   } finally {
     await cleanup(reviewServer, upstream);
   }

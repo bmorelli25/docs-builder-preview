@@ -154,7 +154,7 @@ describe("buildReview", () => {
 
     expect(
       review.files.find(({ path }) => path === "docs/staged.md")?.blocks,
-    ).toEqual([
+    ).toMatchObject([
       {
         kind: "modified",
         startLine: 1,
@@ -164,7 +164,7 @@ describe("buildReview", () => {
     ]);
     expect(
       review.files.find(({ path }) => path === "docs/unstaged.md")?.blocks,
-    ).toEqual([
+    ).toMatchObject([
       {
         kind: "modified",
         startLine: 1,
@@ -301,7 +301,7 @@ describe("buildReview", () => {
 
     const review = await buildReview(repositoryPath, "main", false);
 
-    expect(review.files[0].blocks).toEqual([
+    expect(review.files[0].blocks).toMatchObject([
       {
         kind: "modified",
         startLine: 3,
@@ -559,12 +559,12 @@ describe("buildReview", () => {
         source: "Delete later.",
       },
     ]);
-    expect(review.files[0].blocks).toContainEqual({
+    expect(review.files[0].blocks).toContainEqual(expect.objectContaining({
       kind: "modified",
       startLine: 5,
       endLine: 6,
       source: "Later paragraph first.\nLater paragraph last.",
-    });
+    }));
   });
 
   it("anchors deletions at the beginning and end of the current file", async () => {
@@ -594,7 +594,7 @@ describe("buildReview", () => {
         source: "Delete last.",
       },
     ]);
-    expect(review.files[0].blocks).toEqual([
+    expect(review.files[0].blocks).toMatchObject([
       {
         kind: "modified",
         startLine: 1,
@@ -621,7 +621,7 @@ describe("buildReview", () => {
 
     const review = await buildReview(repositoryPath, "main", false);
 
-    expect(review.files[0].blocks).toEqual([
+    expect(review.files[0].blocks).toMatchObject([
       {
         kind: "modified",
         startLine: 1,
@@ -672,7 +672,7 @@ describe("buildReview", () => {
 
     const review = await buildReview(repositoryPath, "main", false);
 
-    expect(review.files[0].blocks).toEqual([
+    expect(review.files[0].blocks).toMatchObject([
       {
         kind: "modified",
         startLine: 1,
@@ -681,6 +681,139 @@ describe("buildReview", () => {
           "Edited first line.\nUnchanged middle.\nEdited third line.",
       },
     ]);
+  });
+
+  it("diffs a modified table row against the merge-base row it replaced", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docset.yml", "subs:\n  kib: Kibana\n");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      [
+        "| Feature | Status |",
+        "| --- | --- |",
+        "| [**AI Assistant**](/old.md) in {{kib}} | ✅ (deprecated) |",
+        "",
+      ].join("\n"),
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      [
+        "| Feature | Status |",
+        "| --- | --- |",
+        "| [**Agent Builder**](/new.md) | ✅ |",
+        "| [**AI Assistant**](/new.md) in Kibana | ✅ (deprecated in 9.4) |",
+        "",
+      ].join("\n"),
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    const [newRow, editedRow] = review.files[0].blocks;
+    expect(newRow).toMatchObject({ kind: "modified", startLine: 3 });
+    expect(newRow.wordDiff).toBeUndefined();
+    expect(editedRow).toMatchObject({
+      kind: "modified",
+      startLine: 4,
+      previous: {
+        startLine: 3,
+        endLine: 3,
+        source: "| [**AI Assistant**](/old.md) in {{kib}} | ✅ (deprecated) |",
+      },
+      wordDiff: [
+        { kind: "equal", text: "AI Assistant in Kibana ✅ (deprecated" },
+        { kind: "insert", text: "in 9.4" },
+        { kind: "equal", text: ")" },
+      ],
+    });
+  });
+
+  it("maps lines past earlier hunks and follows renamed files", async () => {
+    const repositoryPath = await createRepository();
+    const stableTail = Array.from(
+      { length: 8 },
+      (_, index) => `Unchanged paragraph ${index}.\n`,
+    );
+    await write(
+      repositoryPath,
+      "docs/old-name.md",
+      [
+        "Intro paragraph.",
+        "",
+        "Removed paragraph.",
+        "",
+        "The setting will apply",
+        "to every space.",
+        "",
+        ...stableTail,
+      ].join("\n"),
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await git(repositoryPath, "mv", "docs/old-name.md", "docs/new-name.md");
+    await write(
+      repositoryPath,
+      "docs/new-name.md",
+      [
+        "Intro paragraph.",
+        "",
+        "Added one.",
+        "",
+        "Added two.",
+        "",
+        "The setting applies",
+        "to every space.",
+        "",
+        ...stableTail,
+      ].join("\n"),
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0]).toMatchObject({
+      status: "renamed",
+      previousPath: "docs/old-name.md",
+    });
+    expect(
+      review.files[0].blocks.find(({ startLine }) => startLine === 7),
+    ).toMatchObject({
+      previous: { startLine: 5, endLine: 6 },
+      wordDiff: [
+        { kind: "equal", text: "The setting" },
+        { kind: "delete", text: "will apply" },
+        { kind: "insert", text: "applies" },
+        { kind: "equal", text: "to every space." },
+      ],
+    });
+  });
+
+  it("skips word diffs for rewrites and added files", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "The old sentence talks about one thing.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "A fresh line covering something else entirely, at length.\n",
+    );
+    await write(repositoryPath, "docs/new.md", "Brand new page.\n");
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    for (const file of review.files) {
+      for (const block of file.blocks) {
+        expect(block.previous).toBeUndefined();
+        expect(block.wordDiff).toBeUndefined();
+      }
+    }
   });
 
   it("retains a raw fallback for an unsupported frontmatter change", async () => {
