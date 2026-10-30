@@ -9,6 +9,14 @@ export const reviewStyles = `
   outline: 2px solid #ca8a04;
   outline-offset: 2px;
 }
+label[data-docs-review-tab="added"] {
+  outline: 2px solid #16a34a;
+  outline-offset: -2px;
+}
+label[data-docs-review-tab="modified"] {
+  outline: 2px solid #ca8a04;
+  outline-offset: -2px;
+}
 tr[data-docs-review-mark] > td,
 tr[data-docs-review-mark] > th {
   background: transparent !important;

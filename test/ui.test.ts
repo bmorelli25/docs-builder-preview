@@ -417,6 +417,32 @@ describe("generated browser assets", () => {
     expect(createHighlighterData(review)).toContain('"text":"Read the guide"');
   });
 
+  it("exposes changed tab titles with substitutions applied", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      substitutions: { kib: "Kibana" },
+      files: [
+        {
+          ...rootFile,
+          blocks: [
+            {
+              kind: "modified",
+              startLine: 4,
+              endLine: 4,
+              source: "::::{tab-item} Local files on the {{kib}} host",
+            },
+          ],
+        },
+      ],
+      warnings: [],
+    };
+    expect(createHighlighterData(review)).toContain(
+      '"tabTitle":"Local files on the Kibana host"',
+    );
+  });
+
   it("normalizes every changed block with review substitutions", () => {
     const review: ReviewModel = {
       repositoryPath: "/tmp/repo",

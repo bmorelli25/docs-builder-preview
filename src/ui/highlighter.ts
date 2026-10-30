@@ -34,6 +34,14 @@ export function createSourceHref(
   return `${createSourceBase(repositoryPath, filePath)}:${safeLine}`;
 }
 
+function tabTitle(
+  source: string,
+  substitutions?: Record<string, string>,
+): { tabTitle?: string } {
+  const title = source.match(/^\s*:{3,}\{tab-item\}[ \t]+(.+)$/m)?.[1];
+  return title ? { tabTitle: normalizeVisibleText(title, substitutions) } : {};
+}
+
 export function createHighlighterData(review: ReviewModel): string {
   return safeJson({
     repositoryPath: review.repositoryPath,
@@ -43,6 +51,7 @@ export function createHighlighterData(review: ReviewModel): string {
       blocks: file.blocks.map((block) => ({
           ...block,
           text: normalizeVisibleText(block.source, review.substitutions),
+          ...tabTitle(block.source, review.substitutions),
         })),
     })),
   });
@@ -174,7 +183,22 @@ export const parentHighlighterScript = `(() => {
         return actual.length >= total && containsInOrder(actual, segments);
       });
     };
+    const tabLabels = [...frameDocument.querySelectorAll("label.tabs-label")];
     for (const block of file.blocks || []) {
+      if (block.tabTitle) {
+        const title = normalize(block.tabTitle);
+        const labels = tabLabels.filter((label) =>
+          !label.dataset.docsReviewMark && normalize(label.textContent || "") === title
+        );
+        if (labels.length === 1) {
+          labels[0].dataset.docsReviewMark = block.kind;
+          labels[0].dataset.docsReviewLines = block.startLine + "-" + block.endLine;
+          matched.push({ element: labels[0], block });
+        } else {
+          unmatched.push(block);
+        }
+        continue;
+      }
       const text = normalize(block.text || "");
       const element = text && (uniqueExact(block, text) || uniqueTokenMatch(block, text));
       if (!element) {
@@ -215,6 +239,21 @@ export const parentHighlighterScript = `(() => {
         fallback.textContent = note.textContent;
         deletedFallback.append(fallback);
       }
+    }
+    const tabChanges = new Map();
+    const changedInside = [
+      ...matched.map((match) => [match.element, match.block.kind]),
+      ...[...frameDocument.querySelectorAll(".deleted-inline")].map((note) => [note, "modified"]),
+    ];
+    for (const [element, kind] of changedInside) {
+      for (let content = element.closest(".tabs-content"); content; content = content.parentElement?.closest(".tabs-content")) {
+        const label = content.previousElementSibling;
+        if (!label?.matches("label.tabs-label")) continue;
+        tabChanges.set(label, tabChanges.get(label) === "modified" ? "modified" : kind);
+      }
+    }
+    for (const [label, kind] of tabChanges) {
+      if (!label.dataset.docsReviewMark) label.dataset.docsReviewTab = kind;
     }
     if (file.frontmatter) {
       const range = (start, end) => start === end ? "Line " + start : "Lines " + start + "-" + end;
@@ -259,6 +298,10 @@ export const parentHighlighterScript = `(() => {
       const match = matched[current];
       openSource.href = sourceHref(file, match.block.startLine);
       openSource.hidden = false;
+      for (let content = match.element.closest(".tabs-content"); content; content = content.parentElement?.closest(".tabs-content")) {
+        const input = content.previousElementSibling?.previousElementSibling;
+        if (input?.matches("input.tabs-input")) input.checked = true;
+      }
       match.element.scrollIntoView({ behavior: "smooth", block: "center" });
     };
     previous.disabled = matched.length === 0;
