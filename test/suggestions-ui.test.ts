@@ -38,9 +38,11 @@ describe("suggestions dashboard markup", () => {
     expect(dashboard).toContain(">Copy</button>");
     expect(dashboard).toContain(">Preview</button>");
     expect(dashboard).toContain(">Clear</button>");
-    expect(dashboard).toContain('.suggestion-item-kind[data-kind="instruction"]');
-    expect(dashboard).toContain('.suggestion-item-kind[data-kind="replace"]');
-    expect(dashboard).toContain('.suggestion-item-kind[data-kind="delete"]');
+    expect(dashboard).toContain('.suggestion-kind-pill[data-kind="instruction"]');
+    expect(dashboard).toContain('.suggestion-kind-pill[data-kind="replace"]');
+    expect(dashboard).toContain('.suggestion-kind-pill[data-kind="delete"]');
+    expect(dashboard).toContain("suggestion-popover-title");
+    expect(dashboard).toContain("suggestion-kind-pill");
     expect(dashboard).toMatch(
       /<label class="deleted-control" for="suggest-edits">/,
     );

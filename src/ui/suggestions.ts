@@ -4,6 +4,42 @@ export function suggestionsBootstrap(suggestions: Suggestion[]): string {
   return JSON.stringify({ suggestions }).replaceAll("<", "\\u003c");
 }
 
+export const suggestionKindPillStyles = `
+.suggestion-kind-pill,
+.suggestion-item-kind {
+  display: inline-block;
+  margin: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid #93c5fd;
+  background: #bfdbfe;
+  color: #1e40af;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+.suggestion-kind-pill[data-kind="replace"],
+.suggestion-item-kind[data-kind="replace"] {
+  border-color: #93c5fd;
+  background: #bfdbfe;
+  color: #1e40af;
+}
+.suggestion-kind-pill[data-kind="instruction"],
+.suggestion-item-kind[data-kind="instruction"] {
+  border-color: #e879f9;
+  background: #f5d0fe;
+  color: #86198f;
+}
+.suggestion-kind-pill[data-kind="delete"],
+.suggestion-item-kind[data-kind="delete"] {
+  border-color: #fca5a5;
+  background: #fecaca;
+  color: #991b1b;
+}
+`.trim();
+
 export const suggestionPageStyles = `
 [data-suggestion-mark] {
   background: rgba(37, 99, 235, .12);
@@ -28,6 +64,7 @@ h5 [data-suggestion-mark],
 h6 [data-suggestion-mark] {
   display: inline;
 }
+${suggestionKindPillStyles}
 .suggestion-popover {
   position: absolute;
   z-index: 40;
@@ -41,12 +78,10 @@ h6 [data-suggestion-mark] {
   font: 13px/1.45 system-ui, sans-serif;
 }
 .suggestion-popover[hidden] { display: none !important; }
-.suggestion-popover h4 {
-  margin: 0 0 6px;
-  font-size: 12px;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  color: #64748b;
+.suggestion-popover .suggestion-popover-title {
+  display: flex;
+  align-items: center;
+  margin: 0 0 8px;
 }
 .suggestion-popover .suggestion-original,
 .suggestion-popover .suggestion-new {
@@ -267,34 +302,8 @@ export const suggestionDashboardStyles = `
       border-color: #fcd34d;
       background: #fffbeb;
     }
-    .suggestion-item-kind {
-      display: inline-block;
-      margin-top: 4px;
-      padding: 2px 7px;
-      border-radius: 999px;
-      border: 1px solid #93c5fd;
-      background: #dbeafe;
-      color: #1d4ed8;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .03em;
-      text-transform: uppercase;
-    }
-    .suggestion-item-kind[data-kind="replace"] {
-      border-color: #93c5fd;
-      background: #bfdbfe;
-      color: #1e40af;
-    }
-    .suggestion-item-kind[data-kind="instruction"] {
-      border-color: #e879f9;
-      background: #f5d0fe;
-      color: #86198f;
-    }
-    .suggestion-item-kind[data-kind="delete"] {
-      border-color: #fca5a5;
-      background: #fecaca;
-      color: #991b1b;
-    }
+    .suggestion-item-kind { margin-top: 4px; }
+    ${suggestionKindPillStyles}
     .suggestion-editor {
       position: fixed;
       z-index: 80;
@@ -851,8 +860,15 @@ export const suggestionScript = `
     doc.addEventListener("mousedown", dismiss, true);
     popover.className = "suggestion-popover";
     popover.dataset.kind = suggestion.kind;
-    const title = doc.createElement("h4");
-    title.textContent = kindLabel(suggestion.kind);
+    const title = doc.createElement("div");
+    title.className = "suggestion-popover-title";
+    const pill = doc.createElement("span");
+    pill.className = "suggestion-kind-pill";
+    pill.dataset.kind = suggestion.kind === "instruction" || suggestion.kind === "delete"
+      ? suggestion.kind
+      : "replace";
+    pill.textContent = kindLabel(suggestion.kind);
+    title.append(pill);
     const original = doc.createElement("div");
     original.className = "suggestion-original";
     original.textContent = suggestion.quote.exact;
