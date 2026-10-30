@@ -500,3 +500,43 @@ npm run test:e2e && npm test && npm run typecheck && npm run build && git diff -
 ```
 
 Result: exit 0. Chromium passed 1/1 test in 831 ms total (405 ms test time); Vitest passed 110/110 tests across 9 files; typecheck, build, and Git whitespace checks passed.
+
+## Deleted-hunk current-coordinate placement
+
+### Commit
+
+`2139223` (`Anchor deletions to current source`)
+
+### Changed files
+
+- `src/ui/highlighter.ts`: Places deleted-source notes by `newAnchorLine` and measures distance to each matched block's full current line range.
+- `e2e/dashboard.e2e.ts`: Uses deliberately divergent old/current coordinates and proves the note is inserted beside the current-coordinate block.
+- `test/server.test.ts`: Updated serialized review fixtures for the required deleted-hunk coordinate.
+
+### Red
+
+Command:
+
+```text
+npm run test:e2e
+```
+
+Result: exit 1. Chromium placed the deleted note after `Changed paragraph text` using old line 4 instead of after `Guide` at current anchor line 1.
+
+### Green and final verification
+
+Command:
+
+```text
+npm run test:e2e && npm test && npm run typecheck && npm run build && git diff --check
+```
+
+Result: exit 0. Chromium passed 1/1 test, Vitest passed 113/113 tests across 9 files, typecheck and build completed successfully, and Git reported no whitespace errors.
+
+### Self-review
+
+- Deleted-source labels still display old-file line numbers.
+- Inline placement uses only `newAnchorLine`, with zero distance when the anchor falls inside a matched block's full line range.
+- When no rendered block matches, the Open source fallback also uses the current-file anchor and safely clamps anchor `0` to source line 1.
+- Deleted pages still use the source fallback because they have no matched current blocks.
+- No blocking concerns found. The pre-existing npm `devdir` and Playwright `NO_COLOR` warnings remain.
