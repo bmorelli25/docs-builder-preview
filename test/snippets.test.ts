@@ -105,6 +105,38 @@ describe("findSnippetConsumers", () => {
     ]);
   });
 
+  it("ignores includes inside HTML and MyST comments", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docs/_snippets/shared.md", "Shared text.\n");
+    await write(
+      repositoryPath,
+      "docs/commented.md",
+      [
+        "<!--",
+        "## Hidden",
+        ":::{include} _snippets/shared.md",
+        ":::",
+        "-->",
+        "<!-- :::{include} _snippets/shared.md -->",
+        "% :::{include} _snippets/shared.md",
+      ].join("\n"),
+    );
+    await write(
+      repositoryPath,
+      "docs/live.md",
+      "<!-- note --> Intro\n\n:::{include} _snippets/shared.md\n:::\n",
+    );
+    await git(repositoryPath, "add", ".");
+
+    const consumers = await findSnippetConsumers(repositoryPath, [
+      "docs/_snippets/shared.md",
+    ]);
+
+    expect([...consumers]).toEqual([
+      ["docs/_snippets/shared.md", ["docs/live.md"]],
+    ]);
+  });
+
   it("ignores include targets and changed paths outside the Git root", async () => {
     const repositoryPath = await createRepository();
     const outsidePath = join(dirname(repositoryPath), "outside.md");

@@ -87,7 +87,7 @@ async function safeIncludeTarget(
   return undefined;
 }
 
-function includeTargets(source: string): string[] {
+export function includeTargets(source: string): string[] {
   const targets: string[] = [];
   let codeFence: string | undefined;
   const directiveFences: string[] = [];
@@ -110,7 +110,24 @@ function includeTargets(source: string): string[] {
     }
   };
 
-  for (const line of source.split(/\r?\n/)) {
+  let inComment = false;
+  for (const rawLine of source.split(/\r?\n/)) {
+    let line = rawLine;
+    if (!codeFence) {
+      if (inComment) {
+        const close = line.indexOf("-->");
+        if (close === -1) continue;
+        inComment = false;
+        line = line.slice(close + 3);
+      }
+      line = line.replace(/<!--[\s\S]*?-->/g, "");
+      const open = line.indexOf("<!--");
+      if (open !== -1) {
+        inComment = true;
+        line = line.slice(0, open);
+      }
+      if (/^\s*%/.test(line)) continue;
+    }
     if (codeFence) {
       if (
         new RegExp(`^\\s*${codeFence[0]}{${codeFence.length},}\\s*$`).test(

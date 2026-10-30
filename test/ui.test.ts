@@ -161,14 +161,29 @@ describe("generated browser assets", () => {
 
     const dashboard = createDashboard(review);
     expect(dashboard).toContain(
-      '<span class="file-path" title="docs/deep/&lt;guide&gt;.md"><span class="file-dir"><bdi>docs/deep/</bdi></span><span class="file-name">&lt;guide&gt;.md</span></span>',
-    );
-    expect(dashboard).toContain(
-      '<button type="button" class="copy-path" data-copy-path="docs/deep/&lt;guide&gt;.md"',
+      '<span class="file-path" title="docs/deep/&lt;guide&gt;.md"><span class="file-dir"><bdi>docs/deep/</bdi></span><span class="file-name-row"><span class="file-name">&lt;guide&gt;.md</span><span role="button" tabindex="0" class="copy-path" data-copy-path="docs/deep/&lt;guide&gt;.md"',
     );
     expect(dashboard).toContain("navigator.clipboard.writeText");
-    const link = dashboard.match(/<a class="review-link"[\s\S]*?<\/a>/)?.[0] ?? "";
-    expect(link).not.toContain("copy-path");
+    expect(dashboard).toContain('document.addEventListener("click", copyFrom, true)');
+  });
+
+  it("shows a compact builder status without logs once ready", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [],
+      warnings: [],
+    };
+    const logs = ["stdout: \u001b[34minfo\u001b[0m :: cached links.json"];
+
+    const ready = createDashboard(review, { state: "ready", logs });
+    expect(ready).toContain("docs-builder ready");
+    expect(ready).not.toContain("cached links.json");
+
+    const starting = createDashboard(review, { state: "starting", logs });
+    expect(starting).toContain("<summary>Show log</summary>");
+    expect(starting).toContain("stdout: info :: cached links.json");
   });
 
   it("targets a same-origin iframe and includes selection and filtering behavior", () => {
@@ -247,7 +262,7 @@ describe("generated browser assets", () => {
     expect(dashboard).toContain('aria-label="Sort previewable pages"');
     expect(dashboard).toContain('<option value="path">Path</option>');
     expect(dashboard).toContain(
-      '<option value="lines-changed">Lines changed</option>',
+      '<option value="lines-changed">Most changed</option>',
     );
     expect(dashboard).toContain('id="sidebar-toggle"');
     expect(dashboard).toContain('aria-expanded="true"');

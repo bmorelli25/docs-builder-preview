@@ -33,15 +33,15 @@ function lineCountLabel(count: number, kind: "added" | "deleted"): string {
   return `${count} ${count === 1 ? "line" : "lines"} ${kind}`;
 }
 
-function pathLabel(path: string): string {
+function pathLabel(path: string, trailing = ""): string {
   const slash = path.lastIndexOf("/");
   const directory = slash === -1 ? "" : path.slice(0, slash + 1);
   const name = path.slice(slash + 1);
-  return `${directory ? `<span class="file-dir"><bdi>${escapeHtml(directory)}</bdi></span>` : ""}<span class="file-name">${escapeHtml(name)}</span>`;
+  return `${directory ? `<span class="file-dir"><bdi>${escapeHtml(directory)}</bdi></span>` : ""}<span class="file-name-row"><span class="file-name">${escapeHtml(name)}</span>${trailing}</span>`;
 }
 
 function copyPathButton(path: string): string {
-  return `<button type="button" class="copy-path" data-copy-path="${escapeHtml(path)}" aria-label="Copy path ${escapeHtml(path)}" title="Copy path">Copy path</button>`;
+  return `<span role="button" tabindex="0" class="copy-path" data-copy-path="${escapeHtml(path)}" aria-label="Copy path ${escapeHtml(path)}" title="Copy path"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg></span>`;
 }
 
 function fileSummary(file: ChangedFile, copyButton = true): string {
@@ -50,12 +50,11 @@ function fileSummary(file: ChangedFile, copyButton = true): string {
     : "";
   return `<div class="file-summary">
     <div class="file-heading">
-      <span class="file-path" title="${escapeHtml(file.path)}">${pathLabel(file.path)}</span>
+      <span class="file-path" title="${escapeHtml(file.path)}">${pathLabel(file.path, copyButton ? copyPathButton(file.path) : "")}</span>
       ${previous}
     </div>
-    ${copyButton ? copyPathButton(file.path) : ""}
     <div class="file-meta">
-      <span class="status-badge status-${file.status}">${statusLabel(file.status)}</span>
+      <span class="status-badge status-${file.status}" data-short="${statusLabel(file.status).charAt(0)}">${statusLabel(file.status)}</span>
       <span class="diff-stat additions">+${file.addedLines}</span>
       <span class="diff-stat deletions">−${file.deletedLines}</span>
     </div>
@@ -88,10 +87,9 @@ function pageItem(file: ChangedFile, reviewed: boolean): string {
   const tooltip = `${file.path} — ${status} — +${file.addedLines} −${file.deletedLines}`;
   return `<li ${itemAttributes(file)} data-path="${escapeHtml(file.path)}" data-lines-changed="${file.addedLines + file.deletedLines}" data-review-check-item data-reviewed="${reviewed}">
     <a class="review-link" href="${escapeHtml(href)}" target="docs-preview" data-source-file="${escapeHtml(file.path)}" aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(tooltip)}">
-      ${fileSummary(file, false)}
+      ${fileSummary(file)}
       <span class="mapping-status" data-mapping="pending">Not mapped</span>
     </a>
-    ${copyPathButton(file.path)}
     ${reviewCheckControl(file, reviewed)}
   </li>`;
 }
@@ -194,17 +192,20 @@ export function createDashboard(
     docsBuilderStatus.state === "ready"
       ? "docs-builder ready"
       : docsBuilderStatus.state === "failed"
-        ? "Failed"
-        : "Starting docs-builder";
+        ? "docs-builder failed"
+        : "Starting docs-builder…";
   const docsBuilderDetail =
     docsBuilderStatus.state === "failed" && docsBuilderStatus.error
       ? `<p>${escapeHtml(docsBuilderStatus.error)}</p>`
       : "";
-  const docsBuilderLogs = docsBuilderStatus.logs.length
-    ? `<pre>${escapeHtml(docsBuilderStatus.logs.join("\n"))}</pre>`
-    : "";
+  const docsBuilderLogs =
+    docsBuilderStatus.state !== "ready" && docsBuilderStatus.logs.length
+      ? `<details${docsBuilderStatus.state === "failed" ? " open" : ""}><summary>Show log</summary><pre>${escapeHtml(
+          docsBuilderStatus.logs.join("\n").replace(/\u001b\[[\d;]*[A-Za-z]/g, ""),
+        )}</pre></details>`
+      : "";
   const docsBuilderPanel = `<section class="builder-status builder-${docsBuilderStatus.state}" aria-live="polite" data-docs-builder-state="${docsBuilderStatus.state}">
-    <strong>${docsBuilderLabel}</strong>
+    <strong><span class="builder-dot" aria-hidden="true"></span>${docsBuilderLabel}</strong>
     ${docsBuilderDetail}
     ${docsBuilderLogs}
   </section>`;
@@ -266,34 +267,71 @@ export function createDashboard(
     }
     .metric strong { color: #172033; }
     .workspace {
+      --sidebar-width: 340px;
       display: grid;
-      grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
       min-height: 0;
     }
     .workspace.sidebar-collapsed {
-      grid-template-columns: 84px minmax(0, 1fr);
+      grid-template-columns: 76px minmax(0, 1fr);
     }
     .sidebar {
+      position: relative;
       display: flex;
+      min-width: 0;
       min-height: 0;
       flex-direction: column;
       border-right: 1px solid #d8dee8;
       background: #f8fafc;
     }
-    .sidebar-toggle {
-      min-height: 38px;
-      margin: 10px 14px 0;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      color: #334155;
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px 8px 14px;
+      border-bottom: 1px solid #e2e8f0;
       background: #fff;
+    }
+    .sidebar-title { color: #334155; font-size: 12px; font-weight: 700; }
+    .sidebar-toggle {
+      display: grid;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: #64748b;
+      background: transparent;
       cursor: pointer;
     }
-    .sidebar-toggle:hover { border-color: #94a3b8; background: #f8fafc; }
+    .sidebar-toggle svg { width: 16px; height: 16px; }
+    .sidebar-toggle:hover { border-color: #cbd5e1; color: #172033; background: #f1f5f9; }
+    .sidebar-collapsed .sidebar-header { justify-content: center; padding-inline: 0; }
+    .sidebar-collapsed .sidebar-title { display: none; }
+    .sidebar-collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+    .sidebar-resizer {
+      position: absolute;
+      z-index: 4;
+      top: 0;
+      right: -4px;
+      bottom: 0;
+      width: 8px;
+      cursor: col-resize;
+      touch-action: none;
+    }
+    .sidebar-resizer:hover, .sidebar-resizer:focus-visible, .sidebar-resizer[data-dragging] {
+      outline: 0;
+      background: linear-gradient(to right, transparent 3px, #2563eb 3px, #2563eb 5px, transparent 5px);
+    }
+    .sidebar-collapsed .sidebar-resizer { display: none; }
+    body[data-resizing] { cursor: col-resize; user-select: none; }
+    body[data-resizing] iframe { pointer-events: none; }
     .sidebar-tools {
       display: grid;
       gap: 10px;
-      padding: 14px;
+      padding: 12px 14px;
       border-bottom: 1px solid #e2e8f0;
       background: #fff;
     }
@@ -317,6 +355,10 @@ export function createDashboard(
     }
     input { padding: 8px 10px 8px 34px; }
     select { padding: 8px 10px; }
+    .filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .field { display: grid; gap: 3px; min-width: 0; }
+    .field > span { color: #64748b; font-size: 11px; font-weight: 650; }
+    .field select { min-height: 32px; padding: 5px 8px; font-size: 13px; }
     input:focus, select:focus, button:focus-visible, .review-link:focus-visible {
       outline: 3px solid rgb(37 99 235 / 24%);
       outline-offset: 1px;
@@ -335,11 +377,17 @@ export function createDashboard(
     .warnings { margin: 0; color: #854d0e; font-size: 12px; }
     .warnings summary { cursor: pointer; font-weight: 650; }
     .warnings ul { margin: 6px 0 0; padding-left: 18px; }
-    .builder-status { padding: 9px; border: 1px solid #dbe2ea; border-radius: 8px; font-size: 12px; background: #f8fafc; }
+    .builder-status { color: #475569; font-size: 12px; }
+    .builder-status strong { display: flex; align-items: center; gap: 6px; font-weight: 650; }
+    .builder-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
+    .builder-ready { color: #166534; }
+    .builder-ready .builder-dot { background: #16a34a; }
+    .builder-starting .builder-dot { background: #ca8a04; }
+    .builder-failed { padding: 8px; border: 1px solid #fecaca; border-radius: 8px; color: #991b1b; background: #fef2f2; }
+    .builder-failed .builder-dot { background: #dc2626; }
     .builder-status p { margin: 4px 0 0; }
-    .builder-status pre { max-height: 110px; margin: 7px 0 0; overflow: auto; white-space: pre-wrap; }
-    .builder-failed { color: #991b1b; border-color: #fecaca; background: #fef2f2; }
-    .builder-ready { color: #166534; border-color: #bbf7d0; background: #f0fdf4; }
+    .builder-status summary { margin-top: 4px; color: #64748b; cursor: pointer; }
+    .builder-status pre { max-height: 110px; margin: 6px 0 0; overflow: auto; font-size: 11px; white-space: pre-wrap; }
     .file-list {
       min-height: 0;
       padding: 8px 8px 28px;
@@ -404,28 +452,28 @@ export function createDashboard(
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .file-name { overflow-wrap: anywhere; }
+    .file-name-row { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+    .file-name { min-width: 0; overflow-wrap: anywhere; }
     .copy-path {
-      position: absolute;
-      right: 8px;
-      bottom: 8px;
-      padding: 2px 7px;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      color: #334155;
-      background: #fff;
-      font-size: 11px;
+      display: inline-grid;
+      flex: 0 0 auto;
+      width: 18px;
+      height: 18px;
+      place-items: center;
+      border-radius: 4px;
+      color: #94a3b8;
       cursor: pointer;
       opacity: 0;
     }
-    .file-summary > .copy-path { right: 0; bottom: 0; }
-    li:hover > .copy-path,
-    li:hover > .file-summary > .copy-path,
-    .copy-path:focus-visible,
-    .copy-path[data-copied] { opacity: 1; }
-    .copy-path:hover { background: #f1f5f9; }
-    .copy-path[data-copied] { border-color: #86efac; color: #15803d; }
-    .sidebar-collapsed .copy-path { display: none; }
+    .copy-path svg { width: 13px; height: 13px; }
+    li:hover .copy-path, .copy-path:focus-visible, .copy-path[data-copied] { opacity: 1; }
+    .copy-path:hover { color: #172033; background: #e2e8f0; }
+    .copy-path:focus-visible { outline: 2px solid #2563eb; }
+    .copy-path[data-copied] { color: #15803d; }
+    .copy-path[data-copied] svg { display: none; }
+    .copy-path[data-copied]::after { content: "✓"; font-size: 12px; font-weight: 700; }
+    .sidebar-collapsed .copy-path,
+    .sidebar-collapsed .review-progress { display: none; }
     .previous-path {
       overflow: hidden;
       color: #64748b;
@@ -475,7 +523,6 @@ export function createDashboard(
     .mapping-status[data-mapping="partial"] { color: #a16207; }
     .mapping-status[data-mapping="unmatched"] { color: #b91c1c; }
     .consumer-link .mapping-status { margin: 0 0 0 auto; }
-    .sidebar-collapsed .sidebar-toggle { margin: 8px; }
     .sidebar-collapsed .sidebar-tools,
     .sidebar-collapsed .review-group:not([data-review-group="pages"]),
     .sidebar-collapsed .review-group[data-review-group="pages"] .group-heading,
@@ -493,12 +540,15 @@ export function createDashboard(
       gap: 3px;
     }
     .sidebar-collapsed .status-badge {
-      width: 100%;
-      padding-inline: 3px;
-      overflow: hidden;
-      text-align: center;
-      text-overflow: ellipsis;
+      display: grid;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      place-items: center;
+      font-size: 0;
     }
+    .sidebar-collapsed .status-badge::before { content: attr(data-short); font-size: 11px; }
+    .sidebar-collapsed .file-meta { flex-direction: column; }
     .sidebar-collapsed .diff-stat { font-size: 10px; }
     .no-results {
       margin: 28px 14px;
@@ -581,7 +631,7 @@ export function createDashboard(
       .workspace { grid-template-columns: 1fr; grid-template-rows: auto minmax(520px, 65vh); }
       .sidebar { max-height: 46vh; border-right: 0; border-bottom: 1px solid #d8dee8; }
       .workspace.sidebar-collapsed {
-        grid-template-columns: 84px minmax(0, 1fr);
+        grid-template-columns: 76px minmax(0, 1fr);
         grid-template-rows: minmax(520px, 65vh);
       }
       .sidebar-collapsed .sidebar {
@@ -610,30 +660,36 @@ export function createDashboard(
     </header>
     <main class="workspace">
       <aside class="sidebar" aria-label="Changed documentation">
-        <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button>
+        <div class="sidebar-header">
+          <span class="sidebar-title">Changed files</span>
+          <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+        </div>
+        <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" title="Drag to resize. Double-click to reset." tabindex="0"></div>
         <div class="sidebar-tools">
           <div class="search-wrap">
             <label class="visually-hidden" for="review-search">Search changed files</label>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
             <input id="review-search" type="search" placeholder="Search changed files" autocomplete="off">
           </div>
-          <div>
-            <label class="visually-hidden" for="status-filter">Filter by status</label>
-            <select id="status-filter" aria-label="Filter files by status">
-              <option value="all">All statuses</option>
-              <option value="added">Added</option>
-              <option value="modified">Modified</option>
-              <option value="renamed">Renamed</option>
-              <option value="copied">Copied</option>
-              <option value="deleted">Deleted</option>
-            </select>
-          </div>
-          <div>
-            <label class="visually-hidden" for="page-sort">Sort previewable pages</label>
-            <select id="page-sort" aria-label="Sort previewable pages">
-              <option value="path">Path</option>
-              <option value="lines-changed">Lines changed</option>
-            </select>
+          <div class="filter-row">
+            <label class="field">
+              <span>Show</span>
+              <select id="status-filter" aria-label="Filter files by status">
+                <option value="all">All files</option>
+                <option value="added">Added</option>
+                <option value="modified">Modified</option>
+                <option value="renamed">Renamed</option>
+                <option value="copied">Copied</option>
+                <option value="deleted">Deleted</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Sort by</span>
+              <select id="page-sort" aria-label="Sort previewable pages">
+                <option value="path">Path</option>
+                <option value="lines-changed">Most changed</option>
+              </select>
+            </label>
           </div>
           ${docsBuilderPanel}
           ${warningPanel}
@@ -719,8 +775,52 @@ export function createDashboard(
       const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
       sidebarToggle.setAttribute("aria-label", label);
       sidebarToggle.title = label;
-      sidebarToggle.textContent = collapsed ? "›" : "‹";
     };
+    const sidebarResizer = document.getElementById("sidebar-resizer");
+    const defaultSidebarWidth = 340;
+    const setSidebarWidth = (width) => {
+      const limit = Math.max(260, Math.min(720, window.innerWidth - 360));
+      const clamped = Math.round(Math.min(Math.max(width, 240), limit));
+      workspace.style.setProperty("--sidebar-width", clamped + "px");
+      sidebarResizer.setAttribute("aria-valuenow", String(clamped));
+      return clamped;
+    };
+    const sidebarWidth = () =>
+      parseInt(getComputedStyle(workspace).getPropertyValue("--sidebar-width"), 10) ||
+      defaultSidebarWidth;
+    sidebarResizer.setAttribute("aria-valuemin", "240");
+    sidebarResizer.setAttribute("aria-valuemax", "720");
+    sidebarResizer.setAttribute("aria-valuenow", String(defaultSidebarWidth));
+    sidebarResizer.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      sidebarResizer.setPointerCapture(event.pointerId);
+      sidebarResizer.dataset.dragging = "";
+      document.body.dataset.resizing = "";
+      const left = workspace.getBoundingClientRect().left;
+      const move = (moveEvent) => setSidebarWidth(moveEvent.clientX - left);
+      const stop = () => {
+        sidebarResizer.removeEventListener("pointermove", move);
+        delete sidebarResizer.dataset.dragging;
+        delete document.body.dataset.resizing;
+        persistState();
+      };
+      sidebarResizer.addEventListener("pointermove", move);
+      sidebarResizer.addEventListener("pointerup", stop, { once: true });
+      sidebarResizer.addEventListener("pointercancel", stop, { once: true });
+    });
+    sidebarResizer.addEventListener("dblclick", () => {
+      setSidebarWidth(defaultSidebarWidth);
+      persistState();
+    });
+    sidebarResizer.addEventListener("keydown", (event) => {
+      const step = event.shiftKey ? 64 : 16;
+      if (event.key === "ArrowLeft") setSidebarWidth(sidebarWidth() - step);
+      else if (event.key === "ArrowRight") setSidebarWidth(sidebarWidth() + step);
+      else if (event.key === "Home") setSidebarWidth(defaultSidebarWidth);
+      else return;
+      event.preventDefault();
+      persistState();
+    });
     const applyFilters = () => {
       const query = search.value.trim().toLocaleLowerCase();
       const status = statusFilter.value;
@@ -784,6 +884,7 @@ export function createDashboard(
           hideDeleted: hideDeleted.checked,
           pageSort: pageSort.value,
           sidebarCollapsed: workspace.classList.contains("sidebar-collapsed"),
+          sidebarWidth: sidebarWidth(),
           scrollTop: fileList.scrollTop,
         }));
       } catch {
@@ -850,6 +951,7 @@ export function createDashboard(
         pageSort.value = state.pageSort;
       }
       hideDeleted.checked = state.hideDeleted === true;
+      if (Number.isFinite(state.sidebarWidth)) setSidebarWidth(state.sidebarWidth);
       setSidebarCollapsed(state.sidebarCollapsed === true);
       applyPageSort();
       applyFilters();
@@ -897,20 +999,23 @@ export function createDashboard(
           return copied;
         }
       };
-      document.addEventListener("click", async (event) => {
+      const copyFrom = async (event) => {
         const button = event.target instanceof Element && event.target.closest("[data-copy-path]");
         if (!button) return;
+        if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         event.stopPropagation();
         const copied = await copyText(button.dataset.copyPath || "");
-        button.textContent = copied ? "Copied" : "Copy failed";
+        button.title = copied ? "Copied" : "Copy failed";
         button.dataset.copied = "";
         clearTimeout(button.copyTimer);
         button.copyTimer = setTimeout(() => {
-          button.textContent = "Copy path";
+          button.title = "Copy path";
           delete button.dataset.copied;
         }, 1500);
-      });
+      };
+      document.addEventListener("click", copyFrom, true);
+      document.addEventListener("keydown", copyFrom, true);
     })();
   </script>
   <script>${parentHighlighterScript}</script>

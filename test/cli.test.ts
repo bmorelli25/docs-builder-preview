@@ -208,7 +208,7 @@ describe("runCli", () => {
     runtimes.push(runtime);
 
     const dashboard = await fetch(runtime.url).then((response) => response.text());
-    expect(dashboard).toContain("Failed");
+    expect(dashboard).toContain("docs-builder failed");
     expect(dashboard).toContain("docs-builder exited with code 2");
     expect(dashboard).toContain("Build exploded");
     const preview = await fetch(`${runtime.url}/docs/page`);
@@ -640,7 +640,7 @@ server.listen(port, "127.0.0.1");`,
     runtimes.push(runtime);
 
     const dashboard = await fetch(runtime.url).then((response) => response.text());
-    expect(dashboard).toContain("Failed");
+    expect(dashboard).toContain("docs-builder failed");
     expect(dashboard).toContain("compatible docs-builder");
     const preview = await fetch(`${runtime.url}/docs/page`);
     expect(preview.status).toBe(503);
