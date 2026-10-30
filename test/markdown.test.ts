@@ -287,6 +287,29 @@ describe("segmentMarkdown", () => {
 });
 
 describe("normalizeVisibleText", () => {
+  it("expands exact known docset substitutions and preserves unknown tokens", () => {
+    expect(
+      normalizeVisibleText(
+        "{{agent-builder}} works with {{elastic-sec}} and {{unknown}}.",
+        {
+          "agent-builder": "Elastic Agent Builder",
+          "elastic-sec": "Elastic Security",
+        },
+      ),
+    ).toBe(
+      "Elastic Agent Builder works with Elastic Security and {{unknown}}.",
+    );
+  });
+
+  it("strips applies_to and icon roles without stripping ordinary inline code", () => {
+    expect(
+      normalizeVisibleText(
+        "Use {{kib}} {applies_to}`stack: ga 9.1` {icon}`logo_kibana` with `inline code`.",
+        { kib: "Kibana" },
+      ),
+    ).toBe("Use Kibana with inline code.");
+  });
+
   it("keeps link labels, image alt text, and inline code", () => {
     expect(
       normalizeVisibleText(

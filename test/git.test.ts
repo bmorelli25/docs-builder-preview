@@ -621,6 +621,38 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("loads repository-root docset substitutions into the review model", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docset.yml",
+      "subs:\n  agent-builder: Elastic Agent Builder\n  major: 9\n",
+    );
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/new.md", "{{agent-builder}}\n");
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.substitutions).toEqual({
+      "agent-builder": "Elastic Agent Builder",
+      major: "9",
+    });
+  });
+
+  it("fails review generation with an actionable malformed docset error", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docset.yml", "subs:\n  broken: [one\n");
+    await write(repositoryPath, "README.md", "base\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+
+    await expect(
+      buildReview(repositoryPath, "main", false),
+    ).rejects.toThrow(/Could not parse .*docset\.yml.*YAML/i);
+  });
+
   it("rejects untracked symlinks before reading their targets", async () => {
     const repositoryPath = await createRepository();
     await write(repositoryPath, "README.md", "base\n");

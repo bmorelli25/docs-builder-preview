@@ -10,6 +10,7 @@ import type {
   FileStatus,
   ReviewModel,
 } from "./model.js";
+import { loadDocsetSubstitutions } from "./docset.js";
 import { segmentMarkdown } from "./markdown.js";
 import { sourcePathToRoute } from "./routes.js";
 
@@ -474,6 +475,7 @@ export async function buildReview(
   const gitRoot = (
     await git(repositoryPath, ["rev-parse", "--show-toplevel"])
   ).trim();
+  const substitutions = await loadDocsetSubstitutions(gitRoot);
   const warnings: string[] = [];
   const baseRef = await selectBase(gitRoot, baseOverride, fetch, warnings);
 
@@ -572,6 +574,7 @@ export async function buildReview(
     repositoryPath: gitRoot,
     baseRef,
     mergeBase,
+    substitutions,
     files,
     warnings,
   };

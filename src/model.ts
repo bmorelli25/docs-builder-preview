@@ -35,6 +35,7 @@ export interface ReviewModel {
   repositoryPath: string;
   baseRef: string;
   mergeBase: string;
+  substitutions?: Record<string, string>;
   files: ChangedFile[];
   warnings: string[];
 }

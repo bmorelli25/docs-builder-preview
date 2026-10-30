@@ -341,6 +341,36 @@ describe("generated browser assets", () => {
     expect(createHighlighterData(review)).toContain('"text":"Read the guide"');
   });
 
+  it("normalizes every changed block with review substitutions", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      substitutions: {
+        "agent-builder": "Elastic Agent Builder",
+        kib: "Kibana",
+      },
+      files: [
+        {
+          ...rootFile,
+          blocks: [
+            {
+              kind: "modified",
+              startLine: 1,
+              endLine: 1,
+              source:
+                "{{agent-builder}} in {{kib}} {applies_to}`stack: ga 9.1`",
+            },
+          ],
+        },
+      ],
+      warnings: [],
+    };
+
+    expect(JSON.parse(createHighlighterData(review)).files[0].blocks[0].text)
+      .toBe("Elastic Agent Builder in Kibana");
+  });
+
   it("runs matching and review controls only in the trusted parent", () => {
     expect(() => new Function(parentHighlighterScript)).not.toThrow();
     expect(parentHighlighterScript).toContain("preview.contentDocument");

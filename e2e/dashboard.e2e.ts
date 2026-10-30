@@ -62,8 +62,12 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     if (request.url === "/guide") {
       response.end(`<!doctype html>
         <html><head><link rel="stylesheet" href="/_static/site.css"></head>
-        <body><main><h1>Guide</h1><p>Changed paragraph text</p></main>
-        <script>window.__changedDocsScriptExecuted = true</script></body></html>`);
+        <body><main><h1>Guide</h1><p>Elastic Agent Builder in Kibana</p></main>
+        <script>window.__changedDocsScriptExecuted = true</script>
+        <script src="/runtime.js"></script>
+        <script type="module" src="/module.js"></script>
+        <script type="application/ld+json">{"name":"Guide fixture"}</script>
+        </body></html>`);
       return;
     }
     if (request.url === "/fallback") {
@@ -84,6 +88,10 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     repositoryPath: "/tmp/Repo # 100% ü",
     baseRef: "main",
     mergeBase: "abc",
+    substitutions: {
+      "agent-builder": "Elastic Agent Builder",
+      kib: "Kibana",
+    },
     warnings: [],
     files: [
       {
@@ -98,7 +106,8 @@ test("reviews changed pages safely in the integrated dashboard", async ({
             kind: "modified",
             startLine: 3,
             endLine: 3,
-            source: "Changed paragraph text",
+            source:
+              "{{agent-builder}} in {{kib}} {applies_to}`stack: ga 9.1`",
           },
           {
             kind: "modified",
@@ -155,6 +164,10 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     | Awaited<ReturnType<typeof startReviewServer>>
     | undefined;
   try {
+    const consoleErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
     reviewServer = await startReviewServer({
       review,
       port: 0,
@@ -183,6 +196,13 @@ test("reviews changed pages safely in the integrated dashboard", async ({
       await guide.evaluate(() => window.__changedDocsScriptExecuted),
     ).toBeUndefined();
     expect(
+      await guide
+        .locator('script[type="application/ld+json"]')
+        .evaluate((script) => script.textContent),
+    ).toBe('{"name":"Guide fixture"}');
+    await expect(guide.locator("script:not([type]), script[type=module]"))
+      .toHaveCount(0);
+    expect(
       await guide.locator("body").evaluate((body) => getComputedStyle(body).color),
     ).toBe("rgb(12, 34, 56)");
     await expect(guide.locator('[data-docs-review-mark="added"]')).toHaveCount(1);
@@ -201,6 +221,11 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     await expect(
       guide.locator('[data-docs-review-mark="modified"]'),
     ).toHaveCSS("outline", "rgb(202, 138, 4) solid 2px");
+    expect(
+      consoleErrors.filter((message) =>
+        message.includes("Blocked script execution"),
+      ),
+    ).toEqual([]);
     await expect(page.locator("#mapping-counts")).toHaveText(
       "2 matched · 1 unmatched",
     );

@@ -173,6 +173,94 @@ function proxiedResponseHeaders(
   return result;
 }
 
+const MAX_BUFFERED_HTML_BYTES = 20 * 1024 * 1024;
+
+function openingTagEnd(source: string, start: number): number | undefined {
+  let quote: "'" | '"' | undefined;
+  for (let index = start; index < source.length; index++) {
+    const character = source[index];
+    if (quote) {
+      if (character === quote) quote = undefined;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return undefined;
+}
+
+function scriptType(openingTag: string): string | undefined {
+  const match = openingTag.match(
+    /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i,
+  );
+  return match?.slice(1).find((value) => value !== undefined)?.trim().toLowerCase();
+}
+
+function isExecutableScript(openingTag: string): boolean {
+  const type = scriptType(openingTag);
+  if (type === undefined || type === "" || type === "module") return true;
+  const mime = type.split(";", 1)[0].trim();
+  return /^(?:text|application)\/(?:java|ecma)script$/.test(mime) ||
+    mime === "application/x-ecmascript" ||
+    mime === "application/x-javascript" ||
+    mime === "text/javascript1.0" ||
+    mime === "text/javascript1.1" ||
+    mime === "text/javascript1.2" ||
+    mime === "text/javascript1.3" ||
+    mime === "text/javascript1.4" ||
+    mime === "text/javascript1.5" ||
+    mime === "text/jscript" ||
+    mime === "text/livescript" ||
+    mime === "text/x-javascript";
+}
+
+export function stripExecutableScripts(html: string): string {
+  let result = "";
+  let cursor = 0;
+  const scriptStart = /<script\b/gi;
+  const commentStart = /<!--/g;
+
+  while (cursor < html.length) {
+    scriptStart.lastIndex = cursor;
+    commentStart.lastIndex = cursor;
+    const script = scriptStart.exec(html);
+    const comment = commentStart.exec(html);
+    if (!script) {
+      result += html.slice(cursor);
+      break;
+    }
+    if (comment && comment.index < script.index) {
+      const commentEnd = html.indexOf("-->", comment.index + 4);
+      const end = commentEnd === -1 ? html.length : commentEnd + 3;
+      result += html.slice(cursor, end);
+      cursor = end;
+      continue;
+    }
+
+    const tagEnd = openingTagEnd(html, script.index);
+    if (tagEnd === undefined) {
+      result += html.slice(cursor);
+      break;
+    }
+    const closingTag = /<\/script\s*>/gi;
+    closingTag.lastIndex = tagEnd + 1;
+    const close = closingTag.exec(html);
+    const elementEnd = close?.index === undefined
+      ? html.length
+      : closingTag.lastIndex;
+    const openingTag = html.slice(script.index, tagEnd + 1);
+    if (!isExecutableScript(openingTag)) {
+      result += html.slice(cursor, elementEnd);
+    } else {
+      result += html.slice(cursor, script.index);
+    }
+    cursor = elementEnd;
+  }
+
+  return result;
+}
+
 async function proxyRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -194,13 +282,58 @@ async function proxyRequest(
         upstreamResponse.once("end", removeResponse);
         upstreamResponse.once("error", removeResponse);
         upstreamResponse.once("close", removeResponse);
-        response.writeHead(
-          upstreamResponse.statusCode ?? 502,
-          proxiedResponseHeaders(upstreamResponse.headers),
+        const contentType = upstreamResponse.headers["content-type"] ?? "";
+        const isHtml = /^text\/html(?:\s*;|$)/i.test(
+          Array.isArray(contentType) ? contentType[0] ?? "" : contentType,
         );
-        upstreamResponse.pipe(response);
-        upstreamResponse.once("end", resolve);
-        upstreamResponse.once("close", resolve);
+        if (!isHtml) {
+          response.writeHead(
+            upstreamResponse.statusCode ?? 502,
+            proxiedResponseHeaders(upstreamResponse.headers),
+          );
+          upstreamResponse.pipe(response);
+          upstreamResponse.once("end", resolve);
+          upstreamResponse.once("close", resolve);
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          resolve();
+        };
+        upstreamResponse.on("data", (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_BUFFERED_HTML_BYTES) {
+            upstreamResponse.destroy();
+            send(
+              response,
+              502,
+              `Upstream HTML exceeds ${MAX_BUFFERED_HTML_BYTES} bytes`,
+            );
+            finish();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        upstreamResponse.once("end", () => {
+          if (finished) return;
+          const sanitized = Buffer.from(
+            stripExecutableScripts(Buffer.concat(chunks).toString("utf8")),
+            "utf8",
+          );
+          const headers = proxiedResponseHeaders(upstreamResponse.headers);
+          delete headers["transfer-encoding"];
+          delete headers["content-length"];
+          headers["content-length"] = String(sanitized.length);
+          response.writeHead(upstreamResponse.statusCode ?? 502, headers);
+          response.end(request.method === "HEAD" ? undefined : sanitized);
+          finish();
+        });
+        upstreamResponse.once("close", finish);
         upstreamResponse.once("error", (error) => {
           if (!response.headersSent) send(response, 502, error.message);
           else response.destroy(error);

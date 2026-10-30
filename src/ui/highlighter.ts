@@ -42,7 +42,7 @@ export function createHighlighterData(review: ReviewModel): string {
       sourceBase: createSourceBase(review.repositoryPath, file.path),
       blocks: file.blocks.map((block) => ({
           ...block,
-          text: normalizeVisibleText(block.source),
+          text: normalizeVisibleText(block.source, review.substitutions),
         })),
     })),
   });

@@ -412,6 +412,64 @@ Concern: the real docs-content smoke test was not rerun during this follow-up.
 
 The real docs-content smoke test was not rerun in this subtask.
 
+## Real-docs highlighting follow-up
+
+Status: DONE
+
+### Root cause
+
+- Changed blocks retained docset tokens and inline role source while
+  docs-builder rendered substitutions and applies-to badges.
+- The proxy streamed executable scripts into an iframe that intentionally
+  omits `allow-scripts`, producing blocked-script console errors.
+
+### Red evidence
+
+The new focused tests failed before implementation because `src/docset.ts`
+did not exist, substitutions and roles remained literal, changed blocks did
+not use review substitutions, and executable scripts remained in proxied
+HTML. A separate legacy JavaScript MIME regression failed until
+`application/x-javascript` was classified as executable.
+
+### Implementation
+
+- Added the runtime `yaml` dependency and a repository-root `docset.yml`
+  loader. Scalar substitutions become strings, complex values are ignored,
+  absent configuration returns an empty map, and malformed YAML throws an
+  error naming the file.
+- `buildReview` loads substitutions once. Highlighter data applies them before
+  Markdown normalization, preserves unknown tokens, removes `applies_to` and
+  `icon` roles, and preserves ordinary inline code.
+- The proxy buffers only `text/html` responses up to 20 MiB, removes
+  executable script elements, preserves JSON and JSON-LD data scripts,
+  recalculates `content-length`, and leaves non-HTML streaming unchanged.
+- The browser fixture now reproduces substituted source versus expanded
+  rendered text, checks the computed highlight styles, proves executable
+  scripts are absent, proves JSON-LD remains, and rejects blocked-script
+  console errors.
+
+### Verification
+
+```text
+npm test
+Test Files  10 passed (10)
+Tests  132 passed (132)
+
+npm run test:e2e
+Playwright: 1 passed (1)
+
+npm run typecheck
+exit 0
+
+npm run build
+exit 0
+
+git diff --check
+exit 0
+```
+
+Concern: the real docs-content smoke test was not rerun in this follow-up.
+
 ## Fatal runtime watcher follow-up
 
 Status: DONE

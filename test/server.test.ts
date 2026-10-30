@@ -69,14 +69,29 @@ async function fakeUpstream(): Promise<{
     if (request.url === "/guide" || request.url === "/docs/guide") {
       response.setHeader("content-type", "text/html; charset=utf-8");
       response.setHeader("content-security-policy", "style-src 'self'");
-      response.end(
-        '<!doctype html><html><body><main>Guide</main><script>window.__maliciousDocsScript = true</script></body></html>',
-      );
+      const html = [
+        "<!doctype html><html><body><main>Guide</main>",
+        '<script>window.__maliciousDocsScript = true</script>',
+        '<script src="/normal.js"></script>',
+        '<script type="module" src="/module.js"></script>',
+        '<script type="application/x-javascript">legacy()</script>',
+        '<script type="application/ld+json">{"name":"Guide"}</script>',
+        '<script type="application/json">{"fixture":true}</script>',
+        "</body></html>",
+      ].join("");
+      response.setHeader("content-length", Buffer.byteLength(html));
+      response.end(html);
       return;
     }
     if (request.url === "/events") {
       response.setHeader("content-type", "text/event-stream");
       response.write("data: ready\n\n");
+      return;
+    }
+    if (request.url === "/data.json") {
+      response.setHeader("content-type", "application/json");
+      response.setHeader("content-length", "16");
+      response.end('{"script":"raw"}');
       return;
     }
     response.setHeader("content-type", "text/css");
@@ -220,7 +235,7 @@ describe("startReviewServer", () => {
     expect(await api.json()).toEqual(review);
   });
 
-  it("proxies pages and assets without CORS or executable injection", async () => {
+  it("strips executable scripts from HTML while preserving data scripts", async () => {
     const upstream = await fakeUpstream();
     const server = await start(upstream.url);
 
@@ -234,10 +249,34 @@ describe("startReviewServer", () => {
     expect(page.headers.get("content-security-policy")).toBe("style-src 'self'");
     const html = await page.text();
     expect(html).toContain("<main>Guide</main>");
-    expect(html).toContain("window.__maliciousDocsScript = true");
+    expect(html).not.toContain("window.__maliciousDocsScript = true");
+    expect(html).not.toContain('src="/normal.js"');
+    expect(html).not.toContain('src="/module.js"');
+    expect(html).not.toContain("legacy()");
+    expect(html).toContain(
+      '<script type="application/ld+json">{"name":"Guide"}</script>',
+    );
+    expect(html).toContain(
+      '<script type="application/json">{"fixture":true}</script>',
+    );
+    expect(Number(page.headers.get("content-length"))).toBe(
+      Buffer.byteLength(html),
+    );
     expect(html).not.toContain("data-docs-review-styles");
     expect(html).not.toContain("data-docs-review-highlighter");
     expect(html).not.toContain("new EventSource");
+  });
+
+  it("passes non-HTML responses through unchanged", async () => {
+    const upstream = await fakeUpstream();
+    const server = await start(upstream.url);
+
+    const response = await fetch(`${server.url}/data.json`);
+    const body = await response.text();
+
+    expect(response.headers.get("content-type")).toBe("application/json");
+    expect(response.headers.get("content-length")).toBe("16");
+    expect(body).toBe('{"script":"raw"}');
   });
 
   it("serves dedicated same-origin highlight CSS for strict CSP pages", async () => {

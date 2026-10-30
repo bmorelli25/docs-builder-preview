@@ -199,8 +199,16 @@ function stripLinkDestinations(source: string): string {
   return visible;
 }
 
-export function normalizeVisibleText(source: string): string {
-  const sourceLines = source.split(/\r?\n/);
+export function normalizeVisibleText(
+  source: string,
+  substitutions: Record<string, string> = {},
+): string {
+  const expandedSource = source
+    .replace(/\{\{([^{}\r\n]+)\}\}/g, (token, key: string) =>
+      Object.hasOwn(substitutions, key) ? substitutions[key] : token,
+    )
+    .replace(/\{(?:applies_to|icon)\}\s*`[^`\r\n]*`/g, "");
+  const sourceLines = expandedSource.split(/\r?\n/);
   const openingFence = sourceLines[0]?.match(/^\s*(`{3,}|~{3,})(.*)$/);
   if (
     openingFence &&
@@ -212,7 +220,7 @@ export function normalizeVisibleText(source: string): string {
     return sourceLines.slice(1, -1).join(" ").replace(/\s+/g, " ").trim();
   }
 
-  const inlineCode = protectInlineCode(source);
+  const inlineCode = protectInlineCode(expandedSource);
   const visibleLines = inlineCode.source
     .split(/\r?\n/)
     .filter((line) => {
