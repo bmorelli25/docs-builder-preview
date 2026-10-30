@@ -162,6 +162,11 @@ test("creates, persists, and exports inline edit suggestions", async ({
     );
 
     // Clicking away cancels without saving.
+    browserPage.once("dialog", (dialog) => dialog.accept());
+    await browserPage.locator("#suggestions-clear-all").click();
+    await expect(browserPage.locator("#suggestions-count")).toHaveText(
+      "0 suggestions",
+    );
     await browserPage
       .frameLocator('iframe[name="docs-preview"]')
       .locator("#target")
@@ -178,7 +183,7 @@ test("creates, persists, and exports inline edit suggestions", async ({
     await browserPage.locator("h1").click();
     await expect(editor).toBeHidden();
     await expect(browserPage.locator("#suggestions-count")).toHaveText(
-      "1 suggestion",
+      "0 suggestions",
     );
   } finally {
     await Promise.all(servers.splice(0).map((server) => server.close()));
