@@ -68,3 +68,26 @@ this option is present.
 
 By default, the comparison base is the current pull request base when `gh` can
 resolve it, then `origin/main`, then `main`.
+
+## Testing
+
+Run the unit and integration suite:
+
+```sh
+npm test
+```
+
+Install Playwright's Chromium build once, then run the real-browser dashboard
+test:
+
+```sh
+npx playwright install chromium
+npm run test:e2e
+```
+
+Run static verification and the production build:
+
+```sh
+npm run typecheck
+npm run build
+```

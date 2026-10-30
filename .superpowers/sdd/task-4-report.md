@@ -427,3 +427,43 @@ npm test && npm run typecheck && npm run build && git diff --check
 ```
 
 Result: exit 0, 9 test files passed and 104 tests passed, TypeScript typecheck and build completed, and Git reported no whitespace errors.
+
+## Real-browser dashboard coverage
+
+### Red
+
+Initial command:
+
+```text
+npm run test:e2e
+```
+
+Result: exit 127 after a successful TypeScript build because the Playwright executable was not installed.
+
+### Green
+
+Installed `@playwright/test` and Playwright Chromium, then ran:
+
+```text
+npm run test:e2e
+```
+
+Result: exit 0. Chromium ran 1 test with 1 worker: `reviews changed pages safely in the integrated dashboard` passed in 731 ms; the complete Playwright run finished in 2.4 seconds.
+
+### Coverage and self-review
+
+- The deterministic fixture starts a real fake docs-builder HTTP server and `startReviewServer()` on random localhost ports, then always closes both servers in `finally`.
+- Chromium verifies the integrated dashboard, iframe navigation, blocked changed-document inline script, strict-CSP upstream CSS, green/yellow mappings, matched/unmatched status, previous/next source-line navigation, inline and fallback deleted-source placement, and percent-encoded Open source URLs.
+- The scenario verifies snippet-consumer mapping uses snippet source data, search and status filtering, and SSE refresh restoration of the selected snippet, active filters, iframe, and highlight.
+- `npm run test:e2e` builds first and runs a single Chromium worker. Generated Playwright result/report directories are ignored.
+- README documents unit, browser, typecheck, and build commands plus the one-time Chromium install.
+
+Final verification:
+
+```text
+npm run test:e2e && npm test && npm run typecheck && npm run build && git diff --check
+```
+
+Result: exit 0. Chromium passed 1/1 test in 699 ms total (406 ms test time); Vitest passed 109/109 tests across 9 files; typecheck and build completed; Git reported no whitespace errors.
+
+After hardening fixture teardown to close the upstream even if review-server startup fails, the final `npm run test:e2e` passed 1/1 again in 766 ms total (406 ms test time).
