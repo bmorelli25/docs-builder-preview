@@ -270,8 +270,9 @@ export const suggestionDashboardStyles = `
     .suggestion-item-kind {
       display: inline-block;
       margin-top: 4px;
-      padding: 1px 6px;
+      padding: 2px 7px;
       border-radius: 999px;
+      border: 1px solid #93c5fd;
       background: #dbeafe;
       color: #1d4ed8;
       font-size: 10px;
@@ -280,16 +281,19 @@ export const suggestionDashboardStyles = `
       text-transform: uppercase;
     }
     .suggestion-item-kind[data-kind="replace"] {
-      background: #dbeafe;
-      color: #1d4ed8;
+      border-color: #93c5fd;
+      background: #bfdbfe;
+      color: #1e40af;
     }
     .suggestion-item-kind[data-kind="instruction"] {
-      background: #fae8ff;
-      color: #a21caf;
+      border-color: #e879f9;
+      background: #f5d0fe;
+      color: #86198f;
     }
     .suggestion-item-kind[data-kind="delete"] {
-      background: #fee2e2;
-      color: #b91c1c;
+      border-color: #fca5a5;
+      background: #fecaca;
+      color: #991b1b;
     }
     .suggestion-editor {
       position: fixed;
