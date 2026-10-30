@@ -274,6 +274,74 @@ Build: exit 0
 git diff --check: exit 0
 ```
 
+## Dashboard-first startup follow-up
+
+Status: DONE
+
+### Red evidence
+
+After the lower-level startup tests were red, the CLI integration suite
+reported five failures:
+
+```text
+npm test -- test/cli.test.ts
+
+Test Files  1 failed (1)
+Tests  5 failed | 4 passed (9)
+```
+
+The injected docs-builder seam was unused, the dashboard was not available
+during builder startup, builder failures rejected or disappeared, preview
+status stayed unavailable after success, and CLI cleanup did not own the
+injected child.
+
+### Implementation
+
+- Git analysis now completes first, then the review server and repository
+  watcher start before docs-builder readiness begins.
+- SIGINT and SIGTERM handlers are installed before server, watcher, or
+  docs-builder startup. The shared startup AbortController is passed to
+  `ensureDocsBuilder`.
+- The review URL is printed and optionally opened as soon as the dashboard is
+  listening, including the actual fallback port.
+- Builder logs update bounded dashboard status while startup continues.
+- Builder success switches the proxy to the validated local upstream.
+- Builder startup, build, missing-command, and explicit-port compatibility
+  failures switch status to `failed` but do not stop the dashboard or Git
+  watcher.
+- The watcher continues rebuilding review data and broadcasting refreshes
+  after builder failure.
+- Only an owned handle is registered with the CLI cleanup coordinator.
+  Repeated runtime shutdown stops it exactly once; the review server never
+  participates in docs-builder ownership.
+- `README.md` now documents marker-based reuse, both port fallbacks,
+  dashboard-first startup, visible logs, and HTTP 503 behavior.
+
+### Focused coverage
+
+- Dashboard responds from inside an injected, still-running builder startup.
+- Signal handlers and AbortSignal exist before the builder call.
+- Failure logs and error text render in the dashboard and 503 response.
+- Git live refresh continues after builder failure.
+- Explicit `--docs-port` incompatibility remains visible without launching a
+  replacement process.
+- Owned docs-builder cleanup runs exactly once.
+- Existing compatible marker services remain unowned.
+
+### Final verification
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  109 passed (109)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
+Concern: the real docs-content smoke test was not rerun during this follow-up.
+
 The real docs-content smoke test was not rerun in this subtask.
 
 ## Fatal runtime watcher follow-up

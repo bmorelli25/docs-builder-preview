@@ -14,6 +14,10 @@ import {
   type CliRuntime,
   type RecursiveWatchFactory,
 } from "../src/cli.js";
+import type {
+  DocsBuilderHandle,
+  DocsBuilderOptions,
+} from "../src/docs-builder.js";
 
 const execFileAsync = promisify(execFile);
 const temporaryDirectories: string[] = [];
@@ -119,12 +123,159 @@ async function readUntil(
 }
 
 describe("runCli", () => {
+  it("serves the dashboard before waiting for docs-builder", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const docsPort = await listen(
+      createServer((_request, response) => {
+        response.setHeader("content-type", "text/html");
+        response.end("<script src='/__livereloadscript'></script>");
+      }),
+    );
+    const port = await unusedPort();
+    let dashboardStatusDuringBuilder: number | undefined;
+    const signalListeners = {
+      SIGINT: process.listenerCount("SIGINT"),
+      SIGTERM: process.listenerCount("SIGTERM"),
+    };
+    let receivedSignal: AbortSignal | undefined;
+    const ensure = async (
+      options: DocsBuilderOptions,
+    ): Promise<DocsBuilderHandle> => {
+      receivedSignal = options.signal;
+      expect(process.listenerCount("SIGINT")).toBe(
+        signalListeners.SIGINT + 1,
+      );
+      expect(process.listenerCount("SIGTERM")).toBe(
+        signalListeners.SIGTERM + 1,
+      );
+      dashboardStatusDuringBuilder = (
+        await fetch(`http://127.0.0.1:${port}`)
+      ).status;
+      return {
+        url: `http://127.0.0.1:${docsPort}`,
+        port: docsPort,
+        owned: false,
+        stop: async () => {},
+      };
+    };
+
+    const runtime = await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        docsPort,
+        port,
+        fetch: false,
+        open: false,
+      },
+      { ensureDocsBuilder: ensure },
+    );
+    runtimes.push(runtime);
+
+    expect(dashboardStatusDuringBuilder).toBe(200);
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(receivedSignal?.aborted).toBe(false);
+    expect(await fetch(runtime.url).then((response) => response.text())).toContain(
+      "docs-builder ready",
+    );
+    await runtime.stop();
+    runtimes.pop();
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(process.listenerCount("SIGINT")).toBe(signalListeners.SIGINT);
+    expect(process.listenerCount("SIGTERM")).toBe(signalListeners.SIGTERM);
+  });
+
+  it("keeps watching and serves failure logs when docs-builder startup fails", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const port = await unusedPort();
+    const ensure = async (options: DocsBuilderOptions) => {
+      options.onLog?.("stdout", "Preparing content\n");
+      options.onLog?.("stderr", "Build exploded\n");
+      throw new Error("docs-builder exited with code 2");
+    };
+
+    const runtime = await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        port,
+        fetch: false,
+        open: false,
+      },
+      { ensureDocsBuilder: ensure },
+    );
+    runtimes.push(runtime);
+
+    const dashboard = await fetch(runtime.url).then((response) => response.text());
+    expect(dashboard).toContain("Failed");
+    expect(dashboard).toContain("docs-builder exited with code 2");
+    expect(dashboard).toContain("Build exploded");
+    const preview = await fetch(`${runtime.url}/docs/page`);
+    expect(preview.status).toBe(503);
+    expect(await preview.text()).toContain("Build exploded");
+
+    const events = await fetch(`${runtime.url}/api/events`);
+    const reader = events.body!.getReader();
+    await readUntil(reader, "event: connected");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "```{include} _snippets/shared.md\n```\n\nStill watching.\n",
+    );
+    await readUntil(reader, "event: refresh");
+    await reader.cancel();
+    const refreshed = await fetch(`${runtime.url}/api/review`).then(
+      (response) => response.json(),
+    );
+    expect(
+      refreshed.files.find(
+        (file: { path: string }) => file.path === "docs/page.md",
+      ).blocks.at(-1).source,
+    ).toContain("Still watching.");
+  });
+
+  it("stops an owned docs-builder exactly once through CLI cleanup", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const docsPort = await listen(
+      createServer((_request, response) => {
+        response.setHeader("content-type", "text/html");
+        response.end("<script src='/__livereloadscript'></script>");
+      }),
+    );
+    let stops = 0;
+    const ensure = async (): Promise<DocsBuilderHandle> => ({
+      url: `http://127.0.0.1:${docsPort}`,
+      port: docsPort,
+      owned: true,
+      stop: async () => {
+        stops++;
+      },
+    });
+
+    const runtime = await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        port: await unusedPort(),
+        fetch: false,
+        open: false,
+      },
+      { ensureDocsBuilder: ensure },
+    );
+
+    await runtime.stop();
+    await runtime.stop();
+    expect(stops).toBe(1);
+  });
+
   it("serves a fixture review, attaches snippet consumers, and refreshes after edits", async () => {
     const repositoryPath = await createFixtureRepository();
     const docsPort = await listen(
       createServer((_request, response) => {
         response.setHeader("content-type", "text/html");
-        response.end("<html><body>fixture docs</body></html>");
+        response.end(
+          "<html><body>fixture docs<script src='/__livereloadscript'></script></body></html>",
+        );
       }),
     );
     const port = await unusedPort();
@@ -157,7 +308,7 @@ describe("runCli", () => {
     const consumerPreview = await fetch(
       `${runtime.url}/docs/page?review-source=docs%2F_snippets%2Fshared.md`,
     ).then((response) => response.text());
-    expect(consumerPreview).toBe("<html><body>fixture docs</body></html>");
+    expect(consumerPreview).toContain("fixture docs");
 
     const initialReview = await fetch(`${runtime.url}/api/review`).then(
       (response) => response.json(),
@@ -207,24 +358,33 @@ describe("runCli", () => {
     );
   });
 
-  it("requires --docs-port to identify a healthy existing server", async () => {
+  it("keeps the dashboard available when explicit --docs-port is incompatible", async () => {
     const repositoryPath = await createFixtureRepository();
+    const docsPort = await unusedPort();
+    const port = await unusedPort();
     const signalListeners = {
       SIGINT: process.listenerCount("SIGINT"),
       SIGTERM: process.listenerCount("SIGTERM"),
     };
 
-    await expect(
-      runCli({
+    const runtime = await runCli({
         repositoryPath,
         base: "main",
-        docsPort: await unusedPort(),
-        port: await unusedPort(),
+        docsPort,
+        port,
         fetch: false,
         open: false,
-      }),
-    ).rejects.toThrow(/no healthy docs-builder server.*listening/i);
+      });
+    runtimes.push(runtime);
 
+    const dashboard = await fetch(runtime.url).then((response) => response.text());
+    expect(dashboard).toContain("Failed");
+    expect(dashboard).toContain("compatible docs-builder");
+    const preview = await fetch(`${runtime.url}/docs/page`);
+    expect(preview.status).toBe(503);
+
+    await runtime.stop();
+    runtimes.pop();
     expect(process.listenerCount("SIGINT")).toBe(signalListeners.SIGINT);
     expect(process.listenerCount("SIGTERM")).toBe(signalListeners.SIGTERM);
   });
@@ -232,7 +392,10 @@ describe("runCli", () => {
   it("rejects watcher startup errors and cleans up the review server", async () => {
     const repositoryPath = await createFixtureRepository();
     const docsPort = await listen(
-      createServer((_request, response) => response.end("ready")),
+      createServer((_request, response) => {
+        response.setHeader("content-type", "text/html");
+        response.end("<script src='/__livereloadscript'></script>");
+      }),
     );
     const port = await unusedPort();
     const nativeWatcher = new FakeRecursiveWatcher();
@@ -277,7 +440,10 @@ describe("runCli", () => {
   it("treats runtime watcher errors as fatal and cleans up runtime resources", async () => {
     const repositoryPath = await createFixtureRepository();
     const docsPort = await listen(
-      createServer((_request, response) => response.end("ready")),
+      createServer((_request, response) => {
+        response.setHeader("content-type", "text/html");
+        response.end("<script src='/__livereloadscript'></script>");
+      }),
     );
     const port = await unusedPort();
     const nativeWatcher = new FakeRecursiveWatcher();

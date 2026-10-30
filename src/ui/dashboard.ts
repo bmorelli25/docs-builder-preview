@@ -1,5 +1,6 @@
 import type { ChangedFile, ReviewModel } from "../model.js";
 import { sourcePathToRoute } from "../routes.js";
+import type { DocsBuilderStatus } from "../server.js";
 import {
   createHighlighterData,
   parentHighlighterScript,
@@ -104,7 +105,10 @@ function group(
   </section>`;
 }
 
-export function createDashboard(review: ReviewModel): string {
+export function createDashboard(
+  review: ReviewModel,
+  docsBuilderStatus: DocsBuilderStatus = { state: "starting", logs: [] },
+): string {
   const previewable = review.files.filter(
     (file) => file.route && file.status !== "deleted",
   );
@@ -139,6 +143,24 @@ export function createDashboard(review: ReviewModel): string {
         <ul>${warnings.join("")}</ul>
       </details>`
     : "";
+  const docsBuilderLabel =
+    docsBuilderStatus.state === "ready"
+      ? "docs-builder ready"
+      : docsBuilderStatus.state === "failed"
+        ? "Failed"
+        : "Starting docs-builder";
+  const docsBuilderDetail =
+    docsBuilderStatus.state === "failed" && docsBuilderStatus.error
+      ? `<p>${escapeHtml(docsBuilderStatus.error)}</p>`
+      : "";
+  const docsBuilderLogs = docsBuilderStatus.logs.length
+    ? `<pre>${escapeHtml(docsBuilderStatus.logs.join("\n"))}</pre>`
+    : "";
+  const docsBuilderPanel = `<section class="builder-status builder-${docsBuilderStatus.state}" aria-live="polite" data-docs-builder-state="${docsBuilderStatus.state}">
+    <strong>${docsBuilderLabel}</strong>
+    ${docsBuilderDetail}
+    ${docsBuilderLogs}
+  </section>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -253,6 +275,11 @@ export function createDashboard(review: ReviewModel): string {
     .warnings { margin: 0; color: #854d0e; font-size: 12px; }
     .warnings summary { cursor: pointer; font-weight: 650; }
     .warnings ul { margin: 6px 0 0; padding-left: 18px; }
+    .builder-status { padding: 9px; border: 1px solid #dbe2ea; border-radius: 8px; font-size: 12px; background: #f8fafc; }
+    .builder-status p { margin: 4px 0 0; }
+    .builder-status pre { max-height: 110px; margin: 7px 0 0; overflow: auto; white-space: pre-wrap; }
+    .builder-failed { color: #991b1b; border-color: #fecaca; background: #fef2f2; }
+    .builder-ready { color: #166534; border-color: #bbf7d0; background: #f0fdf4; }
     .file-list {
       min-height: 0;
       padding: 8px 8px 28px;
@@ -460,6 +487,7 @@ export function createDashboard(review: ReviewModel): string {
               <option value="deleted">Deleted</option>
             </select>
           </div>
+          ${docsBuilderPanel}
           ${warningPanel}
         </div>
         <nav class="file-list" aria-label="Review files">

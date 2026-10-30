@@ -35,15 +35,25 @@ Or pass the repository path:
 docs-builder-preview /path/to/docs-content
 ```
 
-The command starts or reuses docs-builder on port 3000, starts the review app
-on `127.0.0.1`, and opens it in the default browser. It watches the repository,
-rebuilds review data after changes, and refreshes connected previews. Press
-Ctrl+C to stop services started by the command. A docs-builder server that was
-already running is never stopped.
+The command starts the review dashboard first, then starts or reuses
+docs-builder on port 3000. It recognizes a running docs-builder by its HTML
+live-reload marker. If another service occupies port 3000, it launches
+docs-builder on a free port instead.
 
-Pass `--docs-port` only to use an existing docs-builder server on a specific
-port. The command fails if that server is not healthy. It never launches a new
-docs-builder process when this option is present.
+The review app listens on `127.0.0.1` and opens in the default browser. If its
+requested port is occupied, it selects a free localhost port and prints the
+actual URL. The dashboard stays available while docs-builder starts and after
+a startup or build failure, where it shows recent builder output and preview
+requests return HTTP 503.
+
+The command watches the repository, rebuilds review data after changes, and
+refreshes connected previews. Press Ctrl+C to stop services started by the
+command. A docs-builder server that was already running is never stopped.
+
+Pass `--docs-port` only to use an existing compatible docs-builder server on a
+specific port. The dashboard reports a clear failure if that server is absent
+or incompatible. The command never launches a new docs-builder process when
+this option is present.
 
 ### Options
 

@@ -121,6 +121,63 @@ async function readUntil(
 }
 
 describe("startReviewServer", () => {
+  it("serves startup and failure status before docs-builder is available", async () => {
+    const server = await startReviewServer({ review, port: 0 });
+    running.push(server);
+
+    const starting = await fetch(server.url).then((response) => response.text());
+    expect(starting).toContain("Starting docs-builder");
+    const unavailable = await fetch(`${server.url}/guide`);
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.text()).toContain("docs-builder is starting");
+
+    const events = await fetch(`${server.url}/api/events`);
+    const reader = events.body!.getReader();
+    await readUntil(reader, "event: connected");
+    server.setDocsBuilderStatus({
+      state: "failed",
+      error: "Build <failed>",
+      logs: Array.from({ length: 150 }, (_, index) => `stderr: line ${index}`),
+    });
+    expect(await readUntil(reader, "event: refresh")).toContain(
+      "event: refresh",
+    );
+    await reader.cancel();
+    const failed = await fetch(server.url).then((response) => response.text());
+    expect(failed).toContain("Build &lt;failed&gt;");
+    expect(failed).toContain("stderr: line 149");
+    expect(failed).not.toContain("stderr: line 0\n");
+    const status = await fetch(`${server.url}/api/docs-builder`).then(
+      (response) => response.json(),
+    );
+    expect(status.logs).toHaveLength(100);
+    expect(status.logs[0]).toBe("stderr: line 50");
+    const failedProxy = await fetch(`${server.url}/guide`);
+    expect(failedProxy.status).toBe(503);
+    expect(await failedProxy.text()).toContain("Build <failed>");
+  });
+
+  it("falls back to a free review port when the requested port is occupied", async () => {
+    const occupied = createServer((_request, response) => response.end("busy"));
+    await new Promise<void>((resolve) =>
+      occupied.listen(0, "127.0.0.1", resolve),
+    );
+    running.push({
+      close: () =>
+        new Promise<void>((resolve, reject) =>
+          occupied.close((error) => (error ? reject(error) : resolve())),
+        ),
+    });
+    const address = occupied.address();
+    if (!address || typeof address === "string") throw new Error("no address");
+
+    const server = await startReviewServer({ review, port: address.port });
+    running.push(server);
+
+    expect(server.port).not.toBe(address.port);
+    expect((await fetch(server.url)).status).toBe(200);
+  });
+
   it("serves the dashboard and review API on localhost", async () => {
     const upstream = await fakeUpstream();
     const server = await start(upstream.url);
@@ -380,83 +437,4 @@ describe("startReviewServer", () => {
     expect(result).toBe("closed");
   });
 
-  it("stops only the docs-builder process it owns", async () => {
-    const upstream = await fakeUpstream();
-    let ownedStops = 0;
-    const owned = await startReviewServer({
-      review,
-      port: 0,
-      docsBuilder: {
-        url: upstream.url,
-        port: Number(new URL(upstream.url).port),
-        owned: true,
-        stop: async () => {
-          ownedStops++;
-        },
-      },
-    });
-    await owned.close();
-    expect(ownedStops).toBe(1);
-
-    let reusedStops = 0;
-    const reused = await startReviewServer({
-      review,
-      port: 0,
-      docsBuilder: {
-        url: upstream.url,
-        port: Number(new URL(upstream.url).port),
-        owned: false,
-        stop: async () => {
-          reusedStops++;
-        },
-      },
-    });
-    await reused.close();
-    expect(reusedStops).toBe(0);
-  });
-
-  it("closes the server when owned docs-builder cleanup fails and retries that cleanup", async () => {
-    const upstream = await fakeUpstream();
-    let stops = 0;
-    const server = await startReviewServer({
-      review,
-      port: 0,
-      docsBuilder: {
-        url: upstream.url,
-        port: Number(new URL(upstream.url).port),
-        owned: true,
-        stop: async () => {
-          stops++;
-          if (stops === 1) throw new Error("stop failed");
-        },
-      },
-    });
-
-    await expect(server.close()).rejects.toThrow(/docs-builder/);
-    await expect(fetch(server.url)).rejects.toThrow();
-    expect(stops).toBe(1);
-
-    await server.close();
-    expect(stops).toBe(2);
-  });
-
-  it("stops an owned docs-builder when upstream validation fails", async () => {
-    let stops = 0;
-
-    await expect(
-      startReviewServer({
-        review,
-        port: 0,
-        docsBuilder: {
-          url: "http://example.com:8080",
-          port: 8080,
-          owned: true,
-          stop: async () => {
-            stops++;
-          },
-        },
-      }),
-    ).rejects.toThrow(/localhost/);
-    expect(stops).toBe(1);
-  });
 });

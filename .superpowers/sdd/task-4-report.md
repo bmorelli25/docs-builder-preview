@@ -159,6 +159,63 @@ Result: exit 0. TypeScript reported no errors and Git reported no whitespace err
 - Readiness now requires a 2xx response. Arbitrary 4xx services on the requested port are not reused.
 - Startup checks both `exitCode` and `signalCode`, reporting a terminating signal before the readiness timeout.
 
+## Resilient upstream and ownership follow-up
+
+Status: DONE
+
+### Red evidence
+
+Focused server and docs-builder tests initially reported six failures:
+
+```text
+npm test -- test/docs-builder.test.ts test/server.test.ts
+
+Test Files  2 failed (2)
+Tests  6 failed | 16 passed (22)
+```
+
+The failures proved that the server required an upstream before it could show
+the dashboard, accepted arbitrary successful HTTP services as docs-builder,
+did not fall back from occupied ports, discarded child output, and could not
+abort a child during readiness.
+
+A later SSE test timed out because docs-builder status transitions did not
+notify an already-open dashboard.
+
+### Implementation
+
+- The review server starts with `starting`, `ready`, or `failed`
+  docs-builder state and no longer requires an upstream at startup.
+- Dashboard and API responses expose bounded status data: the latest 100 log
+  entries, each limited to 2,000 characters.
+- Proxy routes return HTTP 503 with the current failure and recent logs until
+  docs-builder is ready.
+- Status transitions broadcast the existing SSE refresh event so a dashboard
+  opened during startup reloads to show ready or failed state.
+- A requested review port that returns `EADDRINUSE` falls back to an ephemeral
+  localhost port.
+- Server startup and shutdown no longer accept or stop a docs-builder handle.
+  CLI cleanup is the sole owner.
+- Readiness now requires successful HTML containing
+  `__livereloadscript`. A generic 2xx response is incompatible.
+- Managed docs-builder startup selects a free port when the requested default
+  port is occupied by an incompatible service.
+- Child stdout and stderr use pipes and are forwarded through `onLog`.
+- `AbortSignal` stops an owned child during readiness, including escalation to
+  SIGKILL when SIGTERM does not exit.
+
+### Green evidence
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  109 passed (109)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
 ## Integrated dashboard fix
 
 ### Red

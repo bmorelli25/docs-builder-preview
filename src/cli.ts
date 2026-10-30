@@ -23,6 +23,7 @@ export interface CliRuntime {
 
 export interface CliDependencies {
   watchFactory?: RecursiveWatchFactory;
+  ensureDocsBuilder?: typeof ensureDocsBuilder;
   onFatal?: (error: unknown) => void | Promise<void>;
   setExitCode?: (code: number) => void;
 }
@@ -257,18 +258,12 @@ export async function runCli(
       process.exitCode = code;
     });
   const initialReview = await buildReviewWithConsumers(options);
-  const docsBuilder = await ensureDocsBuilder({
-    repositoryPath: initialReview.repositoryPath,
-    port: options.docsPort ?? 3000,
-    existingOnly: options.docsPort !== undefined,
-  });
   const cleanup = createCleanupCoordinator();
-  if (docsBuilder.owned) {
-    cleanup.register("docs-builder", docsBuilder.stop);
-  }
+  const startupAbort = new AbortController();
   let shutdownRequested = false;
   const stop = async () => {
     shutdownRequested = true;
+    startupAbort.abort();
     try {
       await cleanup.stop();
     } finally {
@@ -294,9 +289,11 @@ export async function runCli(
     server = await startReviewServer({
       review: initialReview,
       port: options.port,
-      docsBuilder,
+      docsBuilderStatus: { state: "starting", logs: [] },
     });
     cleanup.register("server", server.close);
+    info(`Review: ${server.url}`);
+    if (options.open) openBrowser(server.url, warn);
     if (shutdownRequested) {
       await stop();
       throw new Error("Startup interrupted by shutdown signal");
@@ -341,6 +338,56 @@ export async function runCli(
       await stop();
       throw new Error("Startup interrupted by shutdown signal");
     }
+
+    const logs: string[] = [];
+    let docsState: "starting" | "ready" | "failed" = "starting";
+    let docsUrl: string | undefined;
+    let docsError: string | undefined;
+    const onLog = (stream: "stdout" | "stderr", text: string) => {
+      logs.push(`${stream}: ${text.trimEnd()}`);
+      if (logs.length > 100) logs.splice(0, logs.length - 100);
+      server.setDocsBuilderStatus({
+        state: docsState,
+        url: docsUrl,
+        error: docsError,
+        logs: [...logs],
+      });
+    };
+    try {
+      const docsBuilder = await (
+        dependencies.ensureDocsBuilder ?? ensureDocsBuilder
+      )({
+        repositoryPath: initialReview.repositoryPath,
+        port: options.docsPort ?? 3000,
+        existingOnly: options.docsPort !== undefined,
+        signal: startupAbort.signal,
+        onLog,
+      });
+      if (docsBuilder.owned) {
+        cleanup.register("docs-builder", docsBuilder.stop);
+      }
+      docsState = "ready";
+      docsUrl = docsBuilder.url;
+      server.setDocsBuilderStatus({
+        state: "ready",
+        url: docsBuilder.url,
+        logs: [...logs],
+      });
+      info(
+        `${docsBuilder.owned ? "Started" : "Using"} docs-builder at ${docsBuilder.url}`,
+      );
+    } catch (error) {
+      if (shutdownRequested) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      warn(`docs-builder failed: ${message}`);
+      docsState = "failed";
+      docsError = message;
+      server.setDocsBuilderStatus({
+        state: "failed",
+        error: message,
+        logs: [...logs],
+      });
+    }
   } catch (error) {
     try {
       await stop();
@@ -352,12 +399,6 @@ export async function runCli(
     }
     throw error;
   }
-
-  info(`Review: ${server.url}`);
-  info(
-    `${docsBuilder.owned ? "Started" : "Using"} docs-builder at ${docsBuilder.url}`,
-  );
-  if (options.open) openBrowser(server.url, warn);
 
   return { url: server.url, stop };
 }

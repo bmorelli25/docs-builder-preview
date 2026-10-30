@@ -6,7 +6,6 @@ import {
 } from "node:http";
 import { request as httpsRequest } from "node:https";
 
-import type { DocsBuilderHandle } from "./docs-builder.js";
 import type { ChangedFile, ReviewModel } from "./model.js";
 import { sourcePathToRoute } from "./routes.js";
 import { createDashboard } from "./ui/dashboard.js";
@@ -16,7 +15,14 @@ export interface ServerOptions {
   review: ReviewModel;
   port?: number;
   upstreamUrl?: string;
-  docsBuilder?: DocsBuilderHandle;
+  docsBuilderStatus?: DocsBuilderStatus;
+}
+
+export interface DocsBuilderStatus {
+  state: "starting" | "ready" | "failed";
+  url?: string;
+  error?: string;
+  logs: string[];
 }
 
 export interface RunningServer {
@@ -24,9 +30,30 @@ export interface RunningServer {
   host: "127.0.0.1";
   port: number;
   setReview(review: ReviewModel): void;
+  setDocsBuilderStatus(status: DocsBuilderStatus): void;
   broadcast(event: string, data?: unknown): number;
   refresh(): number;
   close(): Promise<void>;
+}
+
+function localUpstream(value: string): URL {
+  const upstream = new URL(value);
+  if (
+    !["http:", "https:"].includes(upstream.protocol) ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(upstream.hostname) ||
+    upstream.username ||
+    upstream.password
+  ) {
+    throw new Error("The docs-builder upstream must be localhost");
+  }
+  return upstream;
+}
+
+function boundedStatus(status: DocsBuilderStatus): DocsBuilderStatus {
+  return {
+    ...status,
+    logs: status.logs.slice(-100).map((line) => line.slice(-2_000)),
+  };
 }
 
 const hopByHopHeaders = new Set([
@@ -156,23 +183,16 @@ export async function startReviewServer(
   options: ServerOptions,
 ): Promise<RunningServer> {
   let review = options.review;
-  let upstreamBase: URL;
-  try {
-    const upstreamValue = options.docsBuilder?.url ?? options.upstreamUrl;
-    if (!upstreamValue) throw new Error("A docs-builder upstream is required");
-    upstreamBase = new URL(upstreamValue);
-    if (
-      !["http:", "https:"].includes(upstreamBase.protocol) ||
-      !["127.0.0.1", "localhost", "[::1]"].includes(upstreamBase.hostname) ||
-      upstreamBase.username ||
-      upstreamBase.password
-    ) {
-      throw new Error("The docs-builder upstream must be localhost");
-    }
-  } catch (error) {
-    if (options.docsBuilder?.owned) await options.docsBuilder.stop();
-    throw error;
-  }
+  let docsBuilderStatus = boundedStatus(
+    options.docsBuilderStatus ??
+      (options.upstreamUrl
+        ? { state: "ready", url: options.upstreamUrl, logs: [] }
+        : { state: "starting", logs: [] }),
+  );
+  let upstreamBase =
+    docsBuilderStatus.state === "ready" && docsBuilderStatus.url
+      ? localUpstream(docsBuilderStatus.url)
+      : undefined;
 
   const eventClients = new Set<ServerResponse>();
   const broadcast = (event: string, data: unknown = {}) => {
@@ -204,8 +224,18 @@ export async function startReviewServer(
       send(
         response,
         200,
-        createDashboard(review),
+        createDashboard(review, docsBuilderStatus),
         "text/html; charset=utf-8",
+      );
+      return;
+    }
+    if (target.pathname === "/api/docs-builder") {
+      response.setHeader("cache-control", "no-store");
+      send(
+        response,
+        200,
+        JSON.stringify(docsBuilderStatus),
+        "application/json; charset=utf-8",
       );
       return;
     }
@@ -243,6 +273,20 @@ export async function startReviewServer(
       return;
     }
 
+    if (!upstreamBase || docsBuilderStatus.state !== "ready") {
+      const detail =
+        docsBuilderStatus.state === "failed"
+          ? docsBuilderStatus.error ?? "docs-builder failed"
+          : "docs-builder is starting";
+      const recentLogs = docsBuilderStatus.logs.slice(-10).join("\n");
+      send(
+        response,
+        503,
+        `${detail}${recentLogs ? `\n\nRecent logs:\n${recentLogs}` : ""}`,
+      );
+      return;
+    }
+
     const selectors = target.searchParams.getAll("review-source");
     let file: ChangedFile | undefined;
     if (selectors.length > 0) {
@@ -267,14 +311,32 @@ export async function startReviewServer(
     await proxyRequest(request, response, upstream);
   });
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(options.port ?? 4173, "127.0.0.1", resolve);
+  const listen = (port: number) =>
+    new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(port, "127.0.0.1");
     });
+  const requestedPort = options.port ?? 4173;
+  try {
+    await listen(requestedPort);
   } catch (error) {
-    if (options.docsBuilder?.owned) await options.docsBuilder.stop();
-    throw error;
+    if (
+      requestedPort !== 0 &&
+      (error as NodeJS.ErrnoException).code === "EADDRINUSE"
+    ) {
+      await listen(0);
+    } else {
+      throw error;
+    }
   }
 
   const address = server.address();
@@ -283,7 +345,6 @@ export async function startReviewServer(
     throw new Error("Review server did not receive a TCP address");
   }
   let serverClosed = false;
-  let docsBuilderStopped = !options.docsBuilder?.owned;
   let activeClose: Promise<void> | undefined;
   return {
     host: "127.0.0.1",
@@ -291,6 +352,16 @@ export async function startReviewServer(
     url: `http://127.0.0.1:${address.port}`,
     setReview: (nextReview) => {
       review = nextReview;
+    },
+    setDocsBuilderStatus: (nextStatus) => {
+      const bounded = boundedStatus(nextStatus);
+      const stateChanged = bounded.state !== docsBuilderStatus.state;
+      upstreamBase =
+        bounded.state === "ready" && bounded.url
+          ? localUpstream(bounded.url)
+          : undefined;
+      docsBuilderStatus = bounded;
+      if (stateChanged) broadcast("refresh");
     },
     broadcast,
     refresh: () => broadcast("refresh"),
@@ -314,15 +385,6 @@ export async function startReviewServer(
               }),
             complete: () => {
               serverClosed = true;
-            },
-          });
-        }
-        if (!docsBuilderStopped && options.docsBuilder) {
-          cleanups.push({
-            name: "docs-builder",
-            run: options.docsBuilder.stop,
-            complete: () => {
-              docsBuilderStopped = true;
             },
           });
         }

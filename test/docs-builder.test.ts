@@ -36,7 +36,10 @@ async function availablePort(): Promise<number> {
 
 describe("ensureDocsBuilder", () => {
   it("reuses a ready localhost server and never owns it", async () => {
-    const server = createServer((_request, response) => response.end("ready"));
+    const server = createServer((_request, response) => {
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.end("<html><script src=\"/__livereloadscript\"></script></html>");
+    });
     await new Promise<void>((resolve) =>
       server.listen(0, "127.0.0.1", resolve),
     );
@@ -59,6 +62,32 @@ describe("ensureDocsBuilder", () => {
     expect(handle.url).toBe(`http://127.0.0.1:${address.port}`);
     await handle.stop();
     expect(server.listening).toBe(true);
+  });
+
+  it("rejects an explicit existing server without the docs-builder marker", async () => {
+    const server = createServer((_request, response) => {
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.end("<html><body>unrelated service</body></html>");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    cleanup.push(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        ),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no address");
+
+    await expect(
+      ensureDocsBuilder({
+        repositoryPath: process.cwd(),
+        port: address.port,
+        existingOnly: true,
+      }),
+    ).rejects.toThrow(/not a compatible docs-builder/i);
   });
 
   it("does not reuse an arbitrary server returning a 404", async () => {
@@ -88,6 +117,50 @@ describe("ensureDocsBuilder", () => {
     ).rejects.toThrow(/failed to start/i);
   });
 
+  it("launches on a free port when the default port is occupied by an incompatible service", async () => {
+    const occupied = createServer((_request, response) => {
+      response.setHeader("content-type", "text/html");
+      response.end("<html>other app</html>");
+    });
+    await new Promise<void>((resolve) =>
+      occupied.listen(0, "127.0.0.1", resolve),
+    );
+    cleanup.push(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          occupied.close((error) => (error ? reject(error) : resolve())),
+        ),
+    );
+    const address = occupied.address();
+    if (!address || typeof address === "string") throw new Error("no address");
+    const directory = await mkdtemp(join(tmpdir(), "docs-builder-fallback-"));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const script = join(directory, "builder.cjs");
+    await writeFile(
+      script,
+      `const http = require("node:http");
+const index = process.argv.indexOf("--port");
+const port = Number(process.argv[index + 1]);
+http.createServer((_req, res) => {
+  res.setHeader("content-type", "text/html");
+  res.end("<script src='/__livereloadscript'></script>");
+}).listen(port, "127.0.0.1");`,
+    );
+
+    const handle = await ensureDocsBuilder({
+      repositoryPath: process.cwd(),
+      port: address.port,
+      command: process.execPath,
+      args: [script],
+      timeoutMs: 4_000,
+    });
+    cleanup.push(handle.stop);
+
+    expect(handle.owned).toBe(true);
+    expect(handle.port).not.toBe(address.port);
+    expect(occupied.listening).toBe(true);
+  });
+
   it("fails instead of launching when an existing server is required", async () => {
     await expect(
       ensureDocsBuilder({
@@ -96,7 +169,7 @@ describe("ensureDocsBuilder", () => {
         command: "/does/not/exist",
         existingOnly: true,
       }),
-    ).rejects.toThrow(/no healthy docs-builder server.*listening/i);
+    ).rejects.toThrow(/not a compatible docs-builder/i);
   });
 
   it("starts with an argument array, waits for readiness, and stops its child", async () => {
@@ -110,16 +183,20 @@ describe("ensureDocsBuilder", () => {
 const fs = require("node:fs");
 const http = require("node:http");
 fs.writeFileSync(process.env.ARGS_FILE, JSON.stringify(process.argv.slice(2)));
+process.stdout.write("building docs\\n");
+process.stderr.write("warning from builder\\n");
 const index = process.argv.indexOf("--port");
 const port = Number(process.argv[index + 1]);
 http.createServer((req, res) => {
-  if (req.url === "/ready") res.end("ready");
-  else res.end("<html><body>docs</body></html>");
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  if (req.url === "/ready") res.end("<html><script src='/__livereloadscript'></script></html>");
+  else res.end("<html><body>docs<script src='/__livereloadscript'></script></body></html>");
 }).listen(port, "127.0.0.1");
 `;
     await writeFile(executable, script);
     const port = await availablePort();
 
+    const logs: string[] = [];
     const handle: DocsBuilderHandle = await ensureDocsBuilder({
       repositoryPath,
       port,
@@ -128,6 +205,7 @@ http.createServer((req, res) => {
       readinessPath: "/ready",
       timeoutMs: 4_000,
       env: { ARGS_FILE: argsFile },
+      onLog: (stream, text) => logs.push(`${stream}:${text}`),
     });
     cleanup.push(handle.stop);
 
@@ -139,7 +217,11 @@ http.createServer((req, res) => {
       "--port",
       String(port),
     ]);
-    expect(await (await fetch(`${handle.url}/ready`)).text()).toBe("ready");
+    expect(await (await fetch(`${handle.url}/ready`)).text()).toContain(
+      "__livereloadscript",
+    );
+    expect(logs.join("")).toContain("stdout:building docs");
+    expect(logs.join("")).toContain("stderr:warning from builder");
 
     await handle.stop();
     await expect(fetch(`${handle.url}/ready`)).rejects.toThrow();
@@ -180,5 +262,40 @@ http.createServer((req, res) => {
         timeoutMs: 500,
       }),
     ).rejects.toThrow(/signal SIGTERM/i);
+  });
+
+  it("stops an owned child when startup is aborted", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "docs-builder-abort-"));
+    cleanup.push(() => rm(directory, { recursive: true, force: true }));
+    const script = join(directory, "wait.cjs");
+    const stoppedFile = join(directory, "stopped");
+    await writeFile(
+      script,
+      `const fs = require("node:fs");
+process.on("SIGTERM", () => {
+  fs.writeFileSync(process.env.STOPPED_FILE, "stopped");
+  process.exit(0);
+});
+process.stdout.write("started\\n");
+setInterval(() => {}, 1000);`,
+    );
+    const controller = new AbortController();
+
+    await expect(
+      ensureDocsBuilder({
+        repositoryPath: process.cwd(),
+        port: await availablePort(),
+        command: process.execPath,
+        args: [script],
+        timeoutMs: 4_000,
+        env: { STOPPED_FILE: stoppedFile },
+        signal: controller.signal,
+        onLog: (_stream, text) => {
+          if (text.includes("started")) controller.abort();
+        },
+      }),
+    ).rejects.toThrow(/aborted/i);
+
+    expect(await readFile(stoppedFile, "utf8")).toBe("stopped");
   });
 });
