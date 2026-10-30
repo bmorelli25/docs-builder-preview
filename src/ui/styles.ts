@@ -9,6 +9,30 @@ export const reviewStyles = `
   outline: 2px solid #ca8a04;
   outline-offset: 2px;
 }
+#pages-nav a[data-review-change] {
+  border-radius: 4px;
+  box-shadow: inset 3px 0 0 var(--review-nav-color);
+  background: var(--review-nav-tint);
+  padding-left: 6px;
+}
+#pages-nav a[data-review-change="added"] { --review-nav-color: #16a34a; --review-nav-tint: rgba(34, 197, 94, .14); }
+#pages-nav a[data-review-change="modified"] { --review-nav-color: #ca8a04; --review-nav-tint: rgba(234, 179, 8, .16); }
+#pages-nav a[data-review-change="renamed"],
+#pages-nav a[data-review-change="copied"] { --review-nav-color: #2563eb; --review-nav-tint: rgba(37, 99, 235, .12); }
+#pages-nav a[data-review-contains]::after {
+  content: attr(data-review-contains);
+  display: inline-block;
+  min-width: 1.4em;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: #ca8a04;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.6;
+  text-align: center;
+}
 label[data-docs-review-tab="added"] {
   outline: 2px solid #16a34a;
   outline-offset: -2px;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  markChangedNavigation,
   markCurrentNavigation,
   renderAppliesBadges,
   rewriteDashboardRootLinks,
@@ -25,14 +26,60 @@ describe("renderAppliesBadges", () => {
     expect(result).toContain(
       '<span class="review-applies-badge" data-lifecycle="preview">Serverless &lt;Security&gt;</span>',
     );
-    expect(result).toContain(
-      '<link rel="stylesheet" href="/_review/highlight.css" data-docs-review-styles></head>',
-    );
   });
 
   it("leaves pages without badges unchanged", () => {
     const html = "<html><head></head><body><p>Text</p></body></html>";
     expect(renderAppliesBadges(html)).toBe(html);
+  });
+});
+
+describe("markChangedNavigation", () => {
+  const nav = [
+    '<nav id="pages-nav"><ul>',
+    '<li class="nav-folder"><div class="peer"><a href="/ai" class="nav-folder-link"><span>AI</span></a><input type="checkbox"></div>',
+    '<ul class="nav-subtree">',
+    '<li><a href="/ai/chat"><span>Chat</span></a></li>',
+    '<li class="nav-folder"><div class="peer"><a href="/ai/agents"><span>Agents</span></a></div>',
+    '<ul><li><a href="/ai/agents/tools"><span>Tools</span></a></li></ul></li>',
+    "</ul></li>",
+    '<li><a href="/other"><span>Other</span></a></li>',
+    "</ul></nav>",
+    '<main><a href="/ai/chat">Body link</a></main>',
+  ].join("");
+
+  it("marks changed links and counts changed pages under each folder", () => {
+    const result = markChangedNavigation(
+      nav,
+      new Map([
+        ["/ai/chat", "modified"],
+        ["/ai/agents/tools/", "added"],
+      ]),
+    );
+
+    expect(result).toContain(
+      '<a data-review-contains="2" href="/ai" class="nav-folder-link">',
+    );
+    expect(result).toContain('<a data-review-change="modified" href="/ai/chat">');
+    expect(result).toContain('<a data-review-contains="1" href="/ai/agents">');
+    expect(result).toContain(
+      '<a data-review-change="added" href="/ai/agents/tools">',
+    );
+    expect(result).toContain('<a href="/other">');
+    expect(result).toContain('<main><a href="/ai/chat">Body link</a></main>');
+  });
+
+  it("leaves the nav unchanged when nothing changed", () => {
+    expect(markChangedNavigation(nav, new Map())).toBe(nav);
+  });
+});
+
+describe("rewritePreviewHtml styles", () => {
+  it("links the review stylesheet on every page", () => {
+    const html = "<html><head></head><body><p>Text</p></body></html>";
+    expect(rewritePreviewHtml(html, "/page")).toContain(
+      '<link rel="stylesheet" href="/_review/highlight.css" data-docs-review-styles></head>',
+    );
   });
 });
 

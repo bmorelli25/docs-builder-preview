@@ -246,6 +246,99 @@ export function markCurrentNavigation(html: string, pathname: string): string {
   return applyEdits(html, edits);
 }
 
+function navRouteKey(href: string): string {
+  let path = href.split(/[?#]/, 1)[0];
+  try {
+    path = decodeURI(path);
+  } catch {
+    // Keep malformed escapes as written.
+  }
+  return path.length > 1 ? path.replace(/\/+$/, "") : path;
+}
+
+function insertAttribute(tag: Tag, name: string, value: string): Edit {
+  const position = tag.start + 1 + tag.name.length;
+  const escaped = value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+  return { start: position, end: position, text: ` ${name}="${escaped}"` };
+}
+
+/**
+ * Marks nav links to changed pages with their status, and each folder's own
+ * link with the number of changed pages beneath it, so collapsed folders still
+ * show where changes are.
+ */
+export function markChangedNavigation(
+  html: string,
+  changedRoutes: ReadonlyMap<string, string>,
+): string {
+  if (changedRoutes.size === 0) return html;
+  const statuses = new Map(
+    [...changedRoutes].map(([route, status]) => [navRouteKey(route), status]),
+  );
+  const stack: Array<{
+    name: string;
+    count: number;
+    folder: boolean;
+    firstLink?: Tag;
+  }> = [];
+  const edits: Edit[] = [];
+  const marked = new Set<string>();
+  let navDepth = 0;
+
+  for (const tag of tags(html)) {
+    if (navDepth === 0) {
+      if (
+        !tag.closing &&
+        tag.name === "nav" &&
+        attribute(html, tag, "id")?.value === "pages-nav"
+      ) {
+        navDepth = 1;
+      }
+      continue;
+    }
+    if (tag.name === "nav") {
+      navDepth += tag.closing ? -1 : 1;
+      if (navDepth === 0) break;
+      continue;
+    }
+    if (tag.name === "li" || tag.name === "ul" || tag.name === "ol") {
+      if (tag.closing) {
+        for (let index = stack.length - 1; index >= 0; index--) {
+          if (stack[index].name === tag.name) {
+            for (const entry of stack.splice(index)) {
+              if (entry.folder && entry.firstLink && entry.count > 0) {
+                edits.push(
+                  insertAttribute(entry.firstLink, "data-review-contains", String(entry.count)),
+                );
+              }
+            }
+            break;
+          }
+        }
+      } else {
+        const parent = stack.at(-1);
+        if (tag.name !== "li" && parent?.name === "li") parent.folder = true;
+        stack.push({ name: tag.name, count: 0, folder: false });
+      }
+      continue;
+    }
+    if (tag.closing || tag.name !== "a") continue;
+    for (const entry of stack) {
+      if (entry.name === "li" && !entry.firstLink) entry.firstLink = tag;
+    }
+    const href = attribute(html, tag, "href");
+    if (!href?.value.startsWith("/")) continue;
+    const key = navRouteKey(href.value);
+    const status = statuses.get(key);
+    if (!status) continue;
+    edits.push(insertAttribute(tag, "data-review-change", status));
+    if (marked.has(key)) continue;
+    marked.add(key);
+    for (const entry of stack) if (entry.name === "li") entry.count++;
+  }
+  return applyEdits(html, edits);
+}
+
 /**
  * The dashboard owns `/`, so docs links to the docs root must use the preview
  * alias or they would load the dashboard inside the preview frame.
@@ -275,10 +368,7 @@ function escapeText(value: string): string {
  */
 export function renderAppliesBadges(html: string): string {
   const edits: Edit[] = [];
-  let needsStyles = false;
-  let headEnd: number | undefined;
   for (const tag of tags(html)) {
-    if (tag.closing && tag.name === "head") headEnd = tag.start;
     if (tag.closing || tag.name !== "applies-to-popover") continue;
     const value = (name: string) => attribute(html, tag, name)?.value ?? "";
     const label = [
@@ -287,7 +377,6 @@ export function renderAppliesBadges(html: string): string {
       value("show-version") === "true" ? value("badge-version") : "",
     ].filter(Boolean).join(" ");
     if (!label) continue;
-    needsStyles = true;
     const lifecycle = value("lifecycle-class").replace(/[^\w-]/g, "");
     edits.push({
       start: tag.end,
@@ -295,18 +384,32 @@ export function renderAppliesBadges(html: string): string {
       text: `<span class="review-applies-badge" data-lifecycle="${lifecycle}">${escapeText(label)}</span>`,
     });
   }
-  if (needsStyles && headEnd !== undefined) {
-    edits.push({
-      start: headEnd,
-      end: headEnd,
-      text: '<link rel="stylesheet" href="/_review/highlight.css" data-docs-review-styles>',
-    });
-  }
   return applyEdits(html, edits);
 }
 
-export function rewritePreviewHtml(html: string, pathname: string): string {
-  return renderAppliesBadges(
-    rewriteDashboardRootLinks(markCurrentNavigation(html, pathname)),
+function linkReviewStyles(html: string): string {
+  for (const tag of tags(html)) {
+    if (tag.closing && tag.name === "head") {
+      return applyEdits(html, [{
+        start: tag.start,
+        end: tag.start,
+        text: '<link rel="stylesheet" href="/_review/highlight.css" data-docs-review-styles>',
+      }]);
+    }
+  }
+  return html;
+}
+
+export function rewritePreviewHtml(
+  html: string,
+  pathname: string,
+  changedRoutes: ReadonlyMap<string, string> = new Map(),
+): string {
+  return linkReviewStyles(
+    renderAppliesBadges(
+      rewriteDashboardRootLinks(
+        markChangedNavigation(markCurrentNavigation(html, pathname), changedRoutes),
+      ),
+    ),
   );
 }

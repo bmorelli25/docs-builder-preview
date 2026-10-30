@@ -254,6 +254,7 @@ async function proxyRequest(
   target: URL,
   activeRequests: Set<ClientRequest>,
   activeResponses: Set<IncomingMessage>,
+  changedRoutes: ReadonlyMap<string, string>,
 ): Promise<void> {
   await new Promise<void>((resolve) => {
     const transport = target.protocol === "https:" ? httpsRequest : httpRequest;
@@ -312,6 +313,7 @@ async function proxyRequest(
             rewritePreviewHtml(
               stripExecutableScripts(Buffer.concat(chunks).toString("utf8")),
               target.pathname,
+              changedRoutes,
             ),
             "utf8",
           );
@@ -488,6 +490,13 @@ export async function startReviewServer(
       upstream,
       activeProxyRequests,
       activeProxyResponses,
+      new Map(
+        review.files.flatMap((file) =>
+          file.route && file.status !== "deleted"
+            ? [[file.route, file.status] as const]
+            : [],
+        ),
+      ),
     );
   });
 
