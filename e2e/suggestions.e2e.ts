@@ -67,6 +67,7 @@ test("creates, persists, and exports inline edit suggestions", async ({
     response.end(`<!doctype html><html><body><main>
       <h1>Guide</h1>
       <p id="target">Kibana might prompt you to switch when ready.</p>
+      <p id="diffed">Attack <del class="docs-review-del">discovery</del><ins class="docs-review-ins">Discovery</ins> can detect threats.</p>
     </main></body></html>`);
   });
   const upstreamUrl = await listen(upstream);
@@ -104,6 +105,34 @@ test("creates, persists, and exports inline edit suggestions", async ({
     await expect(textarea).toHaveValue(
       "Kibana might prompt you to switch when ready.",
     );
+    await browserPage.locator("h1").click();
+    await expect(editor).toBeHidden();
+
+    await frame.locator("#diffed").evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await expect(editor).toBeVisible();
+    await expect(textarea).toHaveValue(
+      "Attack Discovery can detect threats.",
+    );
+    await expect(textarea).not.toHaveValue(/discovery Discovery/);
+    await textarea.fill("Kibana prompts you to switch when ready.");
+    // Re-select the plain target for the rest of the flow.
+    await browserPage.locator("h1").click();
+    await frame.locator("#target").evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await expect(editor).toBeVisible();
     await textarea.fill("Kibana prompts you to switch when ready.");
     await browserPage.locator("#suggestion-editor-save").click();
     await expect(editor).toBeHidden();

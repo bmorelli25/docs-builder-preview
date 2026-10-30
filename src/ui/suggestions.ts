@@ -490,21 +490,52 @@ export const suggestionScript = `
     }
   };
 
+  // Word-diff deletions and deleted-line notes are review UI, not page text.
+  const skipVisible = ".docs-review-del, .deleted-inline, .word-diff-panel, script, style, .suggestion-popover, #pages-nav, nav";
+
+  const visibleTextInRange = (range) => {
+    const ancestor = range.commonAncestorContainer;
+    const root = ancestor.nodeType === Node.ELEMENT_NODE
+      ? ancestor
+      : ancestor.parentElement;
+    if (!root) return "";
+    const doc = root.ownerDocument;
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let text = "";
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!node.nodeValue) continue;
+      if (node.parentElement?.closest?.(skipVisible)) continue;
+      try {
+        if (range.comparePoint(node, 0) > 0) continue;
+        if (range.comparePoint(node, node.nodeValue.length) < 0) continue;
+      } catch {
+        continue;
+      }
+      let start = 0;
+      let end = node.nodeValue.length;
+      if (range.startContainer === node) start = range.startOffset;
+      if (range.endContainer === node) end = range.endOffset;
+      if (start < end) text += node.nodeValue.slice(start, end);
+    }
+    return text.replace(/\\s+/g, " ").trim();
+  };
+
   const contextAround = (root, range) => {
-    const full = (root.body || root.documentElement).textContent || "";
-    const beforeRange = root.createRange();
-    beforeRange.selectNodeContents(root.body || root.documentElement);
-    beforeRange.setEnd(range.startContainer, range.startOffset);
-    const prefixEnd = beforeRange.toString().replace(/\\s+/g, " ");
-    const afterRange = root.createRange();
-    afterRange.selectNodeContents(root.body || root.documentElement);
-    afterRange.setStart(range.endContainer, range.endOffset);
-    const suffixStart = afterRange.toString().replace(/\\s+/g, " ");
+    const scope = root.body || root.documentElement;
+    const before = root.createRange();
+    before.selectNodeContents(scope);
+    before.setEnd(range.startContainer, range.startOffset);
+    const after = root.createRange();
+    after.selectNodeContents(scope);
+    after.setStart(range.endContainer, range.endOffset);
+    const exact = visibleTextInRange(range);
+    const prefixEnd = visibleTextInRange(before);
+    const suffixStart = visibleTextInRange(after);
     return {
-      exact: range.toString().replace(/\\s+/g, " ").trim(),
+      exact,
       prefix: prefixEnd.slice(-32),
       suffix: suffixStart.slice(0, 32),
-      full,
     };
   };
 
@@ -527,9 +558,7 @@ export const suggestionScript = `
     let node;
     while ((node = walker.nextNode())) {
       if (!node.nodeValue) continue;
-      if (node.parentElement?.closest?.(
-        "script, style, noscript, .suggestion-popover, #pages-nav, nav",
-      )) continue;
+      if (node.parentElement?.closest?.(skipVisible + ", noscript")) continue;
       nodes.push(node);
     }
     return nodes;
@@ -769,7 +798,6 @@ export const suggestionScript = `
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
     const range = selection.getRangeAt(0);
     if (!preview.contentDocument.body?.contains(range.commonAncestorContainer)) return;
-    if (range.toString().replace(/\\s+/g, " ").trim().length < 1) return;
     if (range.commonAncestorContainer.parentElement?.closest?.("[data-suggestion-mark], .suggestion-popover, a[href]")) {
       return;
     }
