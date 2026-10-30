@@ -63,6 +63,7 @@ export const parentHighlighterScript = `(() => {
   const unmatchedPanel = document.getElementById("unmatched-panel");
   const unmatchedList = document.getElementById("unmatched-list");
   const deletedFallback = document.getElementById("deleted-fallback");
+  const hideDeleted = document.getElementById("hide-deleted-lines");
   previous.textContent = "Previous";
   next.textContent = "Next";
   openSource.textContent = "Open source";
@@ -92,6 +93,14 @@ export const parentHighlighterScript = `(() => {
     const centered = stickyHeight + (navBox.height - stickyHeight) / 2 - box.height / 2;
     nav.scrollTop = Math.max(0, nav.scrollTop + box.top - navBox.top - centered);
   };
+  const applyDeletedVisibility = () => {
+    const hidden = hideDeleted?.checked === true;
+    deletedFallback.hidden = hidden;
+    for (const note of preview.contentDocument?.querySelectorAll(".deleted-inline") || []) {
+      note.hidden = hidden;
+    }
+  };
+  hideDeleted?.addEventListener("change", applyDeletedVisibility);
   const resetParentUi = () => {
     toolbar.hidden = true;
     status.textContent = "0 matched · 0 unmatched";
@@ -110,6 +119,7 @@ export const parentHighlighterScript = `(() => {
     revealCurrentNavItem(frameDocument);
     if (!file || !frameDocument) {
       mappingStatus(link, 0, file?.blocks?.length || 0);
+      applyDeletedVisibility();
       return;
     }
     const stylesheet = frameDocument.createElement("link");
@@ -188,6 +198,7 @@ export const parentHighlighterScript = `(() => {
         deletedFallback.append(fallback);
       }
     }
+    applyDeletedVisibility();
     toolbar.hidden = false;
     status.textContent = matched.length + " matched · " + unmatched.length + " unmatched";
     mappingStatus(link, matched.length, unmatched.length);

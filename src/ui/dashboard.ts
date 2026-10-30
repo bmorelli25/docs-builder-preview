@@ -29,6 +29,10 @@ function statusLabel(status: ChangedFile["status"]): string {
   return status[0].toUpperCase() + status.slice(1);
 }
 
+function lineCountLabel(count: number, kind: "added" | "deleted"): string {
+  return `${count} ${count === 1 ? "line" : "lines"} ${kind}`;
+}
+
 function fileSummary(file: ChangedFile): string {
   const previous = file.previousPath
     ? `<span class="previous-path">from ${escapeHtml(file.previousPath)}</span>`
@@ -67,8 +71,11 @@ function reviewProgress(reviewed: number, total: number): string {
 
 function pageItem(file: ChangedFile, reviewed: boolean): string {
   const href = previewHref(file.route!);
-  return `<li ${itemAttributes(file)} data-review-check-item data-reviewed="${reviewed}">
-    <a class="review-link" href="${escapeHtml(href)}" target="docs-preview" data-source-file="${escapeHtml(file.path)}">
+  const status = statusLabel(file.status);
+  const accessibleLabel = `${file.path}, ${status}, ${lineCountLabel(file.addedLines, "added")}, ${lineCountLabel(file.deletedLines, "deleted")}`;
+  const tooltip = `${file.path} — ${status} — +${file.addedLines} −${file.deletedLines}`;
+  return `<li ${itemAttributes(file)} data-path="${escapeHtml(file.path)}" data-lines-changed="${file.addedLines + file.deletedLines}" data-review-check-item data-reviewed="${reviewed}">
+    <a class="review-link" href="${escapeHtml(href)}" target="docs-preview" data-source-file="${escapeHtml(file.path)}" aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(tooltip)}">
       ${fileSummary(file)}
       <span class="mapping-status" data-mapping="pending">Not mapped</span>
     </a>
@@ -139,6 +146,7 @@ export function createDashboard(
   const supporting = review.files.filter(
     (file) => !file.route && (file.consumers?.length ?? 0) === 0,
   );
+  previewable.sort((left, right) => left.path.localeCompare(right.path));
   const previewPathnames = new Set(previewable.map((file) => file.route!));
   for (const file of snippets) {
     for (const consumer of file.consumers ?? []) {
@@ -249,6 +257,9 @@ export function createDashboard(
       grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
       min-height: 0;
     }
+    .workspace.sidebar-collapsed {
+      grid-template-columns: 84px minmax(0, 1fr);
+    }
     .sidebar {
       display: flex;
       min-height: 0;
@@ -256,6 +267,16 @@ export function createDashboard(
       border-right: 1px solid #d8dee8;
       background: #f8fafc;
     }
+    .sidebar-toggle {
+      min-height: 38px;
+      margin: 10px 14px 0;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      color: #334155;
+      background: #fff;
+      cursor: pointer;
+    }
+    .sidebar-toggle:hover { border-color: #94a3b8; background: #f8fafc; }
     .sidebar-tools {
       display: grid;
       gap: 10px;
@@ -283,7 +304,7 @@ export function createDashboard(
     }
     input { padding: 8px 10px 8px 34px; }
     select { padding: 8px 10px; }
-    input:focus, select:focus, .review-link:focus-visible {
+    input:focus, select:focus, button:focus-visible, .review-link:focus-visible {
       outline: 3px solid rgb(37 99 235 / 24%);
       outline-offset: 1px;
       border-color: #2563eb;
@@ -410,6 +431,31 @@ export function createDashboard(
     .mapping-status[data-mapping="partial"] { color: #a16207; }
     .mapping-status[data-mapping="unmatched"] { color: #b91c1c; }
     .consumer-link .mapping-status { margin: 0 0 0 auto; }
+    .sidebar-collapsed .sidebar-toggle { margin: 8px; }
+    .sidebar-collapsed .sidebar-tools,
+    .sidebar-collapsed .review-group:not([data-review-group="pages"]),
+    .sidebar-collapsed .review-group[data-review-group="pages"] .group-heading,
+    .sidebar-collapsed .file-heading,
+    .sidebar-collapsed .mapping-status {
+      display: none;
+    }
+    .sidebar-collapsed .file-list { padding: 8px 6px 24px; }
+    .sidebar-collapsed .review-group { margin: 0; }
+    .sidebar-collapsed .review-link { padding: 8px 5px; }
+    .sidebar-collapsed .file-summary { display: block; }
+    .sidebar-collapsed .file-meta {
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 3px;
+    }
+    .sidebar-collapsed .status-badge {
+      width: 100%;
+      padding-inline: 3px;
+      overflow: hidden;
+      text-align: center;
+      text-overflow: ellipsis;
+    }
+    .sidebar-collapsed .diff-stat { font-size: 10px; }
     .no-results {
       margin: 28px 14px;
       color: #64748b;
@@ -433,6 +479,20 @@ export function createDashboard(
       font-size: 12px;
     }
     .toolbar-row { display: flex; align-items: center; gap: 7px; }
+    .deleted-control {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 9px;
+      cursor: pointer;
+    }
+    .deleted-control input {
+      width: auto;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      accent-color: #60a5fa;
+    }
     .preview-toolbar button, .preview-toolbar a {
       padding: 5px 8px;
       border: 1px solid #64748b;
@@ -476,6 +536,15 @@ export function createDashboard(
       .metrics { flex-wrap: wrap; }
       .workspace { grid-template-columns: 1fr; grid-template-rows: auto minmax(520px, 65vh); }
       .sidebar { max-height: 46vh; border-right: 0; border-bottom: 1px solid #d8dee8; }
+      .workspace.sidebar-collapsed {
+        grid-template-columns: 84px minmax(0, 1fr);
+        grid-template-rows: minmax(520px, 65vh);
+      }
+      .sidebar-collapsed .sidebar {
+        max-height: none;
+        border-right: 1px solid #d8dee8;
+        border-bottom: 0;
+      }
     }
   </style>
   <style>${reviewCheckStyles}</style>
@@ -497,6 +566,7 @@ export function createDashboard(
     </header>
     <main class="workspace">
       <aside class="sidebar" aria-label="Changed documentation">
+        <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-expanded="true" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button>
         <div class="sidebar-tools">
           <div class="search-wrap">
             <label class="visually-hidden" for="review-search">Search changed files</label>
@@ -512,6 +582,13 @@ export function createDashboard(
               <option value="renamed">Renamed</option>
               <option value="copied">Copied</option>
               <option value="deleted">Deleted</option>
+            </select>
+          </div>
+          <div>
+            <label class="visually-hidden" for="page-sort">Sort previewable pages</label>
+            <select id="page-sort" aria-label="Sort previewable pages">
+              <option value="path">Path</option>
+              <option value="lines-changed">Lines changed</option>
             </select>
           </div>
           ${docsBuilderPanel}
@@ -531,6 +608,10 @@ export function createDashboard(
             <a id="open-source" href="#" target="_blank" rel="noreferrer" hidden>Open source</a>
             <span id="mapping-counts">0 matched · 0 unmatched</span>
           </div>
+          <label class="deleted-control" for="hide-deleted-lines">
+            <input id="hide-deleted-lines" type="checkbox">
+            <span>Hide deleted lines</span>
+          </label>
           <details id="unmatched-panel" hidden>
             <summary>Unmatched source blocks</summary>
             <ul id="unmatched-list"></ul>
@@ -557,14 +638,45 @@ export function createDashboard(
   <script>
     const search = document.getElementById("review-search");
     const statusFilter = document.getElementById("status-filter");
+    const pageSort = document.getElementById("page-sort");
+    const sidebarToggle = document.getElementById("sidebar-toggle");
+    const hideDeleted = document.getElementById("hide-deleted-lines");
+    const workspace = document.querySelector(".workspace");
     const items = [...document.querySelectorAll("[data-review-item]")];
     const groups = [...document.querySelectorAll("[data-review-group]")];
+    const pageList = document.querySelector("[data-review-group=\\"pages\\"] > ul");
+    const pageEntries = pageList
+      ? [...pageList.children].map((item) => ({
+          item,
+          path: item.dataset.path,
+          linesChanged: Number(item.dataset.linesChanged),
+        }))
+      : [];
     const filterEmpty = document.getElementById("filter-empty");
     const previewEmpty = document.querySelector(".preview-empty");
     const preview = document.querySelector('iframe[name="docs-preview"]');
     const fileList = document.querySelector(".file-list");
     const previewLinks = [...document.querySelectorAll(".review-link")];
     let activeHref = null;
+    const applyPageSort = () => {
+      const sorted = [...pageEntries].sort((left, right) => {
+        if (pageSort.value === "lines-changed") {
+          const changedDifference =
+            right.linesChanged - left.linesChanged;
+          if (changedDifference) return changedDifference;
+        }
+        return left.path.localeCompare(right.path);
+      });
+      for (const entry of sorted) pageList?.append(entry.item);
+    };
+    const setSidebarCollapsed = (collapsed) => {
+      workspace.classList.toggle("sidebar-collapsed", collapsed);
+      sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+      const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+      sidebarToggle.setAttribute("aria-label", label);
+      sidebarToggle.title = label;
+      sidebarToggle.textContent = collapsed ? "›" : "‹";
+    };
     const applyFilters = () => {
       const query = search.value.trim().toLocaleLowerCase();
       const status = statusFilter.value;
@@ -625,6 +737,9 @@ export function createDashboard(
           activeHref,
           search: search.value,
           status: statusFilter.value,
+          hideDeleted: hideDeleted.checked,
+          pageSort: pageSort.value,
+          sidebarCollapsed: workspace.classList.contains("sidebar-collapsed"),
           scrollTop: fileList.scrollTop,
         }));
       } catch {
@@ -638,6 +753,17 @@ export function createDashboard(
     });
     statusFilter.addEventListener("change", () => {
       applyFilters();
+      persistState();
+    });
+    pageSort.addEventListener("change", () => {
+      applyPageSort();
+      persistState();
+    });
+    hideDeleted.addEventListener("change", persistState);
+    sidebarToggle.addEventListener("click", () => {
+      setSidebarCollapsed(
+        !workspace.classList.contains("sidebar-collapsed"),
+      );
       persistState();
     });
     fileList.addEventListener("scroll", persistState, { passive: true });
@@ -673,6 +799,15 @@ export function createDashboard(
       ) {
         statusFilter.value = state.status;
       }
+      if (
+        typeof state.pageSort === "string" &&
+        [...pageSort.options].some((option) => option.value === state.pageSort)
+      ) {
+        pageSort.value = state.pageSort;
+      }
+      hideDeleted.checked = state.hideDeleted === true;
+      setSidebarCollapsed(state.sidebarCollapsed === true);
+      applyPageSort();
       applyFilters();
       if (Number.isFinite(state.scrollTop)) fileList.scrollTop = state.scrollTop;
       const activeLink = typeof state.activeHref === "string"
@@ -693,6 +828,10 @@ export function createDashboard(
       } else {
         activateLink(null, false);
       }
+    } else {
+      setSidebarCollapsed(false);
+      applyPageSort();
+      applyFilters();
     }
   </script>
   <script>${parentHighlighterScript}</script>

@@ -28,6 +28,11 @@ export const reviewCheckStyles = `
       outline: 3px solid rgb(37 99 235 / 24%);
       outline-offset: 1px;
     }
+    .sidebar-collapsed .review-check { display: none; }
+    .sidebar-collapsed [data-review-check-item] > .review-link { padding-right: 5px; }
+    .sidebar-collapsed [data-review-check-item][data-reviewed="true"] > .review-link .file-meta::after {
+      content: "✓";
+    }
     [data-review-check-item] { position: relative; }
     [data-review-check-item] > .review-link { padding-right: 44px; }
     .review-check {

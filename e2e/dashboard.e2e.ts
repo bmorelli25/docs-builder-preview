@@ -158,6 +158,24 @@ test("reviews changed pages safely in the integrated dashboard", async ({
         ],
         deletedHunks: [],
       },
+      {
+        path: "docs/many.md",
+        status: "modified",
+        route: "/many",
+        addedLines: 5,
+        deletedLines: 2,
+        blocks: [],
+        deletedHunks: [],
+      },
+      {
+        path: "docs/tie.md",
+        status: "added",
+        route: "/tie",
+        addedLines: 3,
+        deletedLines: 4,
+        blocks: [],
+        deletedHunks: [],
+      },
     ],
   };
   let reviewServer:
@@ -179,6 +197,70 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     ).toBeVisible();
     const iframe = page.locator('iframe[name="docs-preview"]');
     await expect(iframe).toHaveAttribute("sandbox", "allow-same-origin");
+    const hideDeleted = page.getByLabel("Hide deleted lines");
+    const pageSort = page.getByLabel("Sort previewable pages");
+    const sidebarToggle = page.getByRole("button", {
+      name: "Collapse sidebar",
+    });
+    await expect(hideDeleted).not.toBeChecked();
+    await expect(pageSort).toHaveValue("path");
+    await expect(sidebarToggle).toHaveAttribute("aria-expanded", "true");
+
+    const pageEntries = page.locator(
+      '[data-review-group="pages"] > ul > li',
+    );
+    await expect(pageEntries).toHaveCount(4);
+    await expect(
+      pageEntries.evaluateAll((entries) =>
+        entries.map((entry) => entry.getAttribute("data-lines-changed")),
+      ),
+    ).resolves.toEqual([
+      "2",
+      "2",
+      "7",
+      "7",
+    ]);
+    await expect(
+      pageEntries.locator(".review-link").evaluateAll((links) =>
+        links.map((link) => link.getAttribute("data-source-file")),
+      ),
+    ).resolves.toEqual([
+      "docs/fallback.md",
+      "docs/guide # 100% ü?.md",
+      "docs/many.md",
+      "docs/tie.md",
+    ]);
+
+    await pageSort.selectOption("lines-changed");
+    await expect(
+      pageEntries.locator(".review-link").evaluateAll((links) =>
+        links.map((link) => link.getAttribute("data-source-file")),
+      ),
+    ).resolves.toEqual([
+      "docs/many.md",
+      "docs/tie.md",
+      "docs/fallback.md",
+      "docs/guide # 100% ü?.md",
+    ]);
+
+    await sidebarToggle.focus();
+    await page.keyboard.press("Enter");
+    const collapsedGuide = page.locator('a[href="/guide"]');
+    await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
+    await expect(page.getByRole("button", { name: "Expand sidebar" }))
+      .toHaveAttribute("aria-expanded", "false");
+    await expect(collapsedGuide.locator(".file-path")).toBeHidden();
+    await expect(collapsedGuide.locator(".status-badge")).toBeVisible();
+    await expect(collapsedGuide.locator(".additions")).toBeVisible();
+    await expect(collapsedGuide).toHaveAttribute(
+      "aria-label",
+      "docs/guide # 100% ü?.md, Modified, 1 line added, 1 line deleted",
+    );
+    await expect(collapsedGuide).toHaveAttribute(
+      "title",
+      "docs/guide # 100% ü?.md — Modified — +1 −1",
+    );
+    await page.keyboard.press("Space");
 
     await page.getByLabel("Search changed files").fill("guide");
     await expect(page.locator('a[href="/guide"]')).toBeVisible();
@@ -260,11 +342,17 @@ test("reviews changed pages safely in the integrated dashboard", async ({
         previousText: "Guide",
       },
     ]);
+    await hideDeleted.check();
+    await expect(guide.locator(".deleted-inline")).toBeHidden();
+    await hideDeleted.uncheck();
+    await expect(guide.locator(".deleted-inline")).toBeVisible();
+    await hideDeleted.check();
 
     await page.locator('a[href="/fallback"]').click();
     await expect(page.locator("#deleted-fallback")).toContainText(
       "Deleted without surviving content",
     );
+    await expect(page.locator("#deleted-fallback")).toBeHidden();
 
     const snippetLink = page.locator(
       'a[data-source-file="docs/_snippets/shared #.md"]',
@@ -281,6 +369,8 @@ test("reviews changed pages safely in the integrated dashboard", async ({
 
     await page.getByLabel("Search changed files").fill("_snippets");
     await page.getByLabel("Filter files by status").selectOption("modified");
+    await pageSort.selectOption("lines-changed");
+    await page.getByRole("button", { name: "Collapse sidebar" }).click();
     const reloaded = page.waitForEvent("framenavigated", (frame) => {
       return frame === page.mainFrame();
     });
@@ -298,6 +388,13 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     await expect(page.getByLabel("Filter files by status")).toHaveValue(
       "modified",
     );
+    await expect(page.getByLabel("Hide deleted lines")).toBeChecked();
+    await expect(page.getByLabel("Sort previewable pages")).toHaveValue(
+      "lines-changed",
+    );
+    await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
+    await expect(page.getByRole("button", { name: "Expand sidebar" }))
+      .toHaveAttribute("aria-expanded", "false");
     const restoredSnippet = page.locator(
       'a[data-source-file="docs/_snippets/shared #.md"]',
     );
@@ -307,6 +404,14 @@ test("reviews changed pages safely in the integrated dashboard", async ({
         '[data-docs-review-mark="modified"]',
       ),
     ).toHaveCount(1);
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await page.getByLabel("Search changed files").fill("");
+    await page.locator('a[href="/guide"]').click();
+    await expect(
+      page.frameLocator('iframe[name="docs-preview"]').locator(
+        ".deleted-inline",
+      ),
+    ).toBeHidden();
   } finally {
     await cleanup(reviewServer, upstream);
   }

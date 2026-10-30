@@ -39,9 +39,9 @@ describe("review check dashboard markup", () => {
   it("adds a labeled checkbox outside the link of each previewable page card", () => {
     const dashboard = createDashboard(review);
 
-    expect(checkboxes(dashboard).map((match) => match[1])).toEqual([
-      "docs/guide.md",
+    expect(checkboxes(dashboard).map((match) => match[1]).sort()).toEqual([
       "docs/added.md",
+      "docs/guide.md",
     ]);
     expect(dashboard).toContain('aria-label="Mark docs/guide.md as reviewed"');
     const card = dashboard.match(
