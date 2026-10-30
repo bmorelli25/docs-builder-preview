@@ -239,6 +239,7 @@ function parseZeroContextDiff(output: string): ParsedDiff {
       deletedHunks.push({
         oldStartLine: current.oldStart,
         oldEndLine: current.oldStart + current.deleted.length - 1,
+        newAnchorLine: current.newStart,
         source: current.deleted.join("\n"),
       });
       if (current.added.length === 0) {

@@ -146,6 +146,7 @@ describe("buildReview", () => {
         {
           oldStartLine: 1,
           oldEndLine: 1,
+          newAnchorLine: 1,
           source: "old paragraph",
         },
       ],
@@ -342,10 +343,108 @@ describe("buildReview", () => {
         {
           oldStartLine: 2,
           oldEndLine: 2,
+          newAnchorLine: 1,
           source: "Deleted middle line.",
         },
       ],
     });
+  });
+
+  it("uses current-file anchors after earlier deletions shift a later hunk", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      [
+        "Keep start.",
+        "Delete early one.",
+        "Delete early two.",
+        "Delete early three.",
+        "",
+        "Keep middle.",
+        "",
+        "Later paragraph first.",
+        "Delete later.",
+        "Later paragraph last.",
+        "",
+      ].join("\n"),
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      [
+        "Keep start.",
+        "",
+        "Keep middle.",
+        "",
+        "Later paragraph first.",
+        "Later paragraph last.",
+        "",
+      ].join("\n"),
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].deletedHunks).toEqual([
+      {
+        oldStartLine: 2,
+        oldEndLine: 4,
+        newAnchorLine: 1,
+        source:
+          "Delete early one.\nDelete early two.\nDelete early three.",
+      },
+      {
+        oldStartLine: 9,
+        oldEndLine: 9,
+        newAnchorLine: 5,
+        source: "Delete later.",
+      },
+    ]);
+    expect(review.files[0].blocks).toContainEqual({
+      kind: "modified",
+      startLine: 5,
+      endLine: 6,
+      source: "Later paragraph first.\nLater paragraph last.",
+    });
+  });
+
+  it("anchors deletions at the beginning and end of the current file", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "Delete first.\nKeep middle.\nDelete last.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/page.md", "Keep middle.\n");
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].deletedHunks).toEqual([
+      {
+        oldStartLine: 1,
+        oldEndLine: 1,
+        newAnchorLine: 0,
+        source: "Delete first.",
+      },
+      {
+        oldStartLine: 3,
+        oldEndLine: 3,
+        newAnchorLine: 1,
+        source: "Delete last.",
+      },
+    ]);
+    expect(review.files[0].blocks).toEqual([
+      {
+        kind: "modified",
+        startLine: 1,
+        endLine: 1,
+        source: "Keep middle.",
+      },
+    ]);
   });
 
   it("classifies an insertion inside an existing paragraph as modified", async () => {
@@ -468,6 +567,7 @@ describe("buildReview", () => {
         {
           oldStartLine: 1,
           oldEndLine: 1,
+          newAnchorLine: 0,
           source: "# Deleted",
         },
       ],

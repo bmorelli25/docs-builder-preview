@@ -111,6 +111,7 @@ test("reviews changed pages safely in the integrated dashboard", async ({
           {
             oldStartLine: 4,
             oldEndLine: 4,
+            newAnchorLine: 1,
             source: "Deleted near surviving content",
           },
         ],
@@ -126,6 +127,7 @@ test("reviews changed pages safely in the integrated dashboard", async ({
           {
             oldStartLine: 1,
             oldEndLine: 2,
+            newAnchorLine: 0,
             source: "Deleted without surviving content",
           },
         ],
@@ -229,8 +231,8 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     ).toEqual([
       {
         source: "Deleted lines 4-4: Deleted near surviving content",
-        previousMark: "modified",
-        previousText: "Changed paragraph text",
+        previousMark: "added",
+        previousText: "Guide",
       },
     ]);
 

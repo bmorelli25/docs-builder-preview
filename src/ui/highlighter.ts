@@ -157,9 +157,16 @@ export const parentHighlighterScript = `(() => {
       note.textContent = "Deleted lines " + hunk.oldStartLine + "-" +
         hunk.oldEndLine + ": " + hunk.source;
       if (matched.length) {
+        const distanceFromAnchor = (match) =>
+          hunk.newAnchorLine < match.block.startLine
+            ? match.block.startLine - hunk.newAnchorLine
+            : hunk.newAnchorLine > match.block.endLine
+              ? hunk.newAnchorLine - match.block.endLine
+              : 0;
         const nearest = matched.reduce((best, candidate) =>
-          Math.abs(candidate.block.startLine - hunk.oldStartLine) <
-          Math.abs(best.block.startLine - hunk.oldStartLine) ? candidate : best
+          distanceFromAnchor(candidate) < distanceFromAnchor(best)
+            ? candidate
+            : best
         );
         nearest.element.insertAdjacentElement("afterend", note);
       } else {
@@ -187,7 +194,7 @@ export const parentHighlighterScript = `(() => {
     if (matched.length) {
       show(1);
     } else {
-      const line = unmatched[0]?.startLine || file.deletedHunks?.[0]?.oldStartLine || 1;
+      const line = unmatched[0]?.startLine || file.deletedHunks?.[0]?.newAnchorLine || 1;
       openSource.href = sourceHref(file, line);
       openSource.hidden = false;
     }

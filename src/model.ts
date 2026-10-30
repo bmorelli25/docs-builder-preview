@@ -15,6 +15,7 @@ export interface ChangedBlock {
 export interface DeletedHunk {
   oldStartLine: number;
   oldEndLine: number;
+  newAnchorLine: number;
   source: string;
 }
 

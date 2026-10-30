@@ -41,6 +41,7 @@ const review: ReviewModel = {
         {
           oldStartLine: 4,
           oldEndLine: 4,
+          newAnchorLine: 3,
           source: "Removed sentence",
         },
       ],
