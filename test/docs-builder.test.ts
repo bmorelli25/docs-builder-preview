@@ -12,7 +12,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ensureDocsBuilder, type DocsBuilderHandle } from "../src/docs-builder.js";
+import {
+  DOCS_BUILDER_DRAIN_TIMEOUT_MS,
+  ensureDocsBuilder,
+  type DocsBuilderHandle,
+} from "../src/docs-builder.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -63,6 +67,10 @@ server.listen(port, "127.0.0.1");`,
 }
 
 describe("ensureDocsBuilder", () => {
+  it("bounds post-exit stdio draining", () => {
+    expect(DOCS_BUILDER_DRAIN_TIMEOUT_MS).toBe(250);
+  });
+
   it("reuses a ready localhost server and never owns it", async () => {
     const server = createServer((_request, response) => {
       response.setHeader("content-type", "text/html; charset=utf-8");

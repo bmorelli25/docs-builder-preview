@@ -28,6 +28,8 @@ export interface DocsBuilderExit {
   intentional: boolean;
 }
 
+export const DOCS_BUILDER_DRAIN_TIMEOUT_MS = 250;
+
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
@@ -158,8 +160,27 @@ export async function ensureDocsBuilder(
   });
   let intentionalStop = false;
   const exit = new Promise<DocsBuilderExit>((resolve) => {
+    let settled = false;
+    let drainTimer: NodeJS.Timeout | undefined;
+    let exitResult: DocsBuilderExit | undefined;
+    const publish = (result: DocsBuilderExit) => {
+      if (settled) return;
+      settled = true;
+      if (drainTimer) clearTimeout(drainTimer);
+      resolve(result);
+    };
+    child.once("exit", (code, signal) => {
+      exitResult = { code, signal, intentional: intentionalStop };
+      drainTimer = setTimeout(
+        () => publish(exitResult!),
+        DOCS_BUILDER_DRAIN_TIMEOUT_MS,
+      );
+      drainTimer.unref();
+    });
     child.once("close", (code, signal) => {
-      resolve({ code, signal, intentional: intentionalStop });
+      publish(
+        exitResult ?? { code, signal, intentional: intentionalStop },
+      );
     });
   });
   let spawnError: Error | undefined;

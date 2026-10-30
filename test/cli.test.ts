@@ -409,8 +409,7 @@ const port = Number(process.argv[index + 1]);
 const server = http.createServer((req, res) => {
   res.setHeader("content-type", "text/html");
   if (req.url === "/exit") {
-    res.end("exiting");
-    server.close(() => {
+    res.end("exiting", () => {
       spawn(
         process.execPath,
         ["-e", "setTimeout(() => { process.stderr.write('final stderr before close\\\\n'); }, 100)"],
@@ -461,6 +460,74 @@ server.listen(port, "127.0.0.1");`,
       "docs-builder exited unexpectedly with code 13",
     );
     expect(status.logs).toContain("stderr: final stderr before close");
+  });
+
+  it("fails within the drain bound when a descendant keeps stdio open", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const script = join(repositoryPath, "held-stdio-builder.cjs");
+    await writeFile(
+      script,
+      `const http = require("node:http");
+const { spawn } = require("node:child_process");
+const index = process.argv.indexOf("--port");
+const port = Number(process.argv[index + 1]);
+const server = http.createServer((req, res) => {
+  res.setHeader("content-type", "text/html");
+  if (req.url === "/exit") {
+    res.end("exiting", () => {
+      spawn(
+        process.execPath,
+        ["-e", "setTimeout(() => {}, 1200)"],
+        { stdio: ["ignore", "ignore", "inherit"] },
+      );
+      process.exit(14);
+    });
+    return;
+  }
+  res.end("<script src='/__livereloadscript'></script>");
+});
+server.listen(port, "127.0.0.1");`,
+    );
+    const builderPort = await unusedPort();
+    const runtime = await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        port: await unusedPort(),
+        fetch: false,
+        open: false,
+      },
+      {
+        ensureDocsBuilder: (options) =>
+          ensureDocsBuilder({
+            ...options,
+            port: builderPort,
+            existingOnly: false,
+            command: process.execPath,
+            args: [script],
+            timeoutMs: 4_000,
+          }),
+      },
+    );
+    runtimes.push(runtime);
+    const events = await fetch(`${runtime.url}/api/events`);
+    const reader = events.body!.getReader();
+    await readUntil(reader, "event: connected");
+
+    const startedAt = Date.now();
+    await fetch(`http://127.0.0.1:${builderPort}/exit`);
+    await readUntil(reader, "event: refresh");
+    const elapsed = Date.now() - startedAt;
+    await reader.cancel();
+
+    expect(elapsed).toBeLessThan(750);
+    const status = await fetch(`${runtime.url}/api/docs-builder`).then(
+      (response) => response.json(),
+    );
+    expect(status.error).toBe(
+      "docs-builder exited unexpectedly with code 14",
+    );
+    expect((await fetch(`${runtime.url}/docs/page`)).status).toBe(503);
   });
 
   it("serves a fixture review, attaches snippet consumers, and refreshes after edits", async () => {

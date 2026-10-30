@@ -466,3 +466,76 @@ TypeScript typecheck: exit 0
 Build: exit 0
 git diff --check: exit 0
 ```
+
+## Bounded post-exit stdio drain follow-up
+
+Status: DONE
+
+### Red evidence
+
+The held-stdio fixture failed before the production change:
+
+```text
+npm test -- test/cli.test.ts -t "keeps stdio"
+
+Test Files  1 failed (1)
+Tests  1 failed | 12 skipped (13)
+Observed refresh time: 1233ms
+Required maximum: 750ms
+```
+
+The owned process exited, but its descendant inherited stderr and kept the
+pipe open. The public exit notification waited for `close`, so the dashboard
+did not enter the failed state until the descendant exited.
+
+### Fix
+
+- Added the exported `DOCS_BUILDER_DRAIN_TIMEOUT_MS` constant, set to 250ms.
+- The owned child's `exit` event now snapshots its code, signal, and
+  intentional-stop state, then starts the bounded drain timer.
+- A normal `close` publishes immediately after stdout/stderr drain and
+  cancels the timer. If `close` does not arrive, the timer publishes the
+  snapshot once.
+- Existing readiness and stop paths still use the prompt child `exit` event.
+  Intentional shutdown cannot be relabeled by delayed publication.
+
+### Regression coverage
+
+- The existing final-stderr fixture still proves that a normal delayed
+  `close` includes the last stderr line in the first failed dashboard state.
+- A deterministic descendant now holds inherited stderr for 1200ms. The
+  dashboard transitions to failed, emits its refresh, and returns preview
+  status 503 within the bounded interval.
+- Existing tests retain unexpected code, unexpected signal, and intentional
+  stop coverage.
+
+### Green evidence
+
+Focused verification:
+
+```text
+npm test -- test/docs-builder.test.ts test/cli.test.ts -t "drain|keeps stdio"
+
+Test Files  2 passed (2)
+Tests  3 passed | 23 skipped (26)
+```
+
+Final verification:
+
+```text
+npm test && npm run test:e2e && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  123 passed (123)
+Playwright: 1 passed (1)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
+### Self-review and concerns
+
+The timer is canceled on `close`, publication is guarded against duplicate
+resolution, and the intentional flag is captured at child exit rather than
+when the drain window ends. The real docs-content smoke test was not run in
+this follow-up.
