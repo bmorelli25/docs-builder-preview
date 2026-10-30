@@ -107,6 +107,7 @@ test("creates, persists, and exports inline edit suggestions", async ({
     );
     await browserPage.locator("h1").click();
     await expect(editor).toBeHidden();
+    await browserPage.waitForTimeout(600);
 
     await frame.locator("#diffed").evaluate((element) => {
       const range = document.createRange();
@@ -121,9 +122,10 @@ test("creates, persists, and exports inline edit suggestions", async ({
       "Attack Discovery can detect threats.",
     );
     await expect(textarea).not.toHaveValue(/discovery Discovery/);
-    await textarea.fill("Kibana prompts you to switch when ready.");
     // Re-select the plain target for the rest of the flow.
     await browserPage.locator("h1").click();
+    await expect(editor).toBeHidden();
+    await browserPage.waitForTimeout(600);
     await frame.locator("#target").evaluate((element) => {
       const range = document.createRange();
       range.selectNodeContents(element);
