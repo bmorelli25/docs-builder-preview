@@ -105,7 +105,7 @@ test("creates, persists, and exports inline edit suggestions", async ({
       "Kibana might prompt you to switch when ready.",
     );
     await textarea.fill("Kibana prompts you to switch when ready.");
-    await browserPage.locator("h1").click();
+    await browserPage.locator("#suggestion-editor-save").click();
     await expect(editor).toBeHidden();
     await expect(browserPage.locator("#suggestions-count")).toHaveText(
       "1 suggestion",
@@ -152,10 +152,33 @@ test("creates, persists, and exports inline edit suggestions", async ({
     await textarea.fill("Make this sentence shorter.");
     await editor.getByText("Instruction", { exact: true }).click();
     await expect(editor).toBeVisible();
-    await browserPage.locator("h1").click();
+    await textarea.press("Control+Enter");
     await expect(editor).toBeHidden();
     await expect(browserPage.locator(".suggestion-item-kind")).toHaveText(
       "Instruction",
+    );
+    await expect(browserPage.locator("#suggestions-count")).toHaveText(
+      "1 suggestion",
+    );
+
+    // Clicking away cancels without saving.
+    await browserPage
+      .frameLocator('iframe[name="docs-preview"]')
+      .locator("#target")
+      .evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      });
+    await expect(editor).toBeVisible();
+    await textarea.fill("This should be discarded.");
+    await browserPage.locator("h1").click();
+    await expect(editor).toBeHidden();
+    await expect(browserPage.locator("#suggestions-count")).toHaveText(
+      "1 suggestion",
     );
   } finally {
     await Promise.all(servers.splice(0).map((server) => server.close()));

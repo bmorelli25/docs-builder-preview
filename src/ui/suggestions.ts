@@ -250,6 +250,16 @@ export const suggestionDashboardStyles = `
       justify-content: space-between;
       gap: 8px;
     }
+    .suggestion-editor-save {
+      padding: 6px 12px;
+      border: 1px solid #2563eb;
+      border-radius: 8px;
+      color: #fff;
+      background: #2563eb;
+      font: 600 12px/1.2 system-ui, sans-serif;
+      cursor: pointer;
+    }
+    .suggestion-editor-save:hover { background: #1d4ed8; }
     .suggestion-kind {
       display: inline-flex;
       gap: 2px;
@@ -309,7 +319,6 @@ export const suggestionScript = `
 
   let activeQuote = null;
   let editingId = null;
-  let saveOnBlur = true;
   let popover = null;
   let popoverSuggestionId = null;
   let ignoreSelectionUntil = 0;
@@ -405,7 +414,13 @@ export const suggestionScript = `
     editor.hidden = true;
     activeQuote = null;
     editingId = null;
-    saveOnBlur = true;
+  };
+
+  const cancelEditor = () => {
+    if (editor.hidden) return;
+    clearFrameSelection();
+    ignoreSelectionUntil = Date.now() + 500;
+    hideEditor();
   };
 
   const positionEditor = (rect) => {
@@ -797,6 +812,10 @@ export const suggestionScript = `
   const bindFrame = () => {
     const doc = preview.contentDocument;
     if (!doc) return;
+    doc.addEventListener("mousedown", () => {
+      // Clicks land in the iframe, not the parent. Cancel without saving.
+      cancelEditor();
+    }, true);
     doc.addEventListener("mouseup", () => setTimeout(onSelection, 0));
     doc.addEventListener("keyup", (event) => {
       if (event.key === "Shift" || event.key.startsWith("Arrow")) setTimeout(onSelection, 0);
@@ -805,10 +824,7 @@ export const suggestionScript = `
     doc.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         if (popover) hidePopover();
-        if (!editor.hidden) {
-          saveOnBlur = false;
-          hideEditor();
-        }
+        cancelEditor();
       }
     });
     markPage();
@@ -820,13 +836,14 @@ export const suggestionScript = `
   editorText.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
-      saveOnBlur = false;
-      hideEditor();
+      cancelEditor();
+    } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void saveEditor();
     }
   });
 
-  // Keep focus in the textarea when using Replace/Instruction so the editor
-  // does not save/close mid-edit. Still allow the radios to receive the click.
+  // Replace/Instruction only change the type. Keep focus in the textarea.
   editor.addEventListener("mousedown", (event) => {
     if (!(event.target instanceof Element)) return;
     if (event.target.closest('input[name="suggestion-kind"], .suggestion-kind label')) {
@@ -843,8 +860,12 @@ export const suggestionScript = `
     }
     if (editor.hidden) return;
     if (editor.contains(event.target)) return;
-    if (saveOnBlur) void saveEditor();
-    else hideEditor();
+    cancelEditor();
+  });
+
+  document.getElementById("suggestion-editor-save")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    void saveEditor();
   });
 
   copyAll.addEventListener("click", async () => {
@@ -903,7 +924,8 @@ export function suggestionsPanelMarkup(suggestions: Suggestion[]): string {
           <label><input type="radio" name="suggestion-kind" value="replace" checked><span>Replace</span></label>
           <label><input type="radio" name="suggestion-kind" value="instruction"><span>Instruction</span></label>
         </div>
+        <button type="button" class="suggestion-editor-save" id="suggestion-editor-save" title="⌘↩ or Ctrl+Enter">Save</button>
       </div>
-      <p class="suggestion-editor-hint">Click away to save. Escape cancels. Clear the text to delete.</p>
+      <p class="suggestion-editor-hint">Replace/Instruction sets the type. Save or press ⌘↩ (Ctrl+Enter) to keep. Escape cancels. Clear the text to delete.</p>
     </div>`;
 }
