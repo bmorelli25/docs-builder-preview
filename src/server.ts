@@ -58,6 +58,19 @@ function boundedStatus(status: DocsBuilderStatus): DocsBuilderStatus {
   };
 }
 
+export function isAllowedHostAuthority(
+  authority: string,
+  listeningPort: number,
+): boolean {
+  const match = authority.match(
+    /^(?:127\.0\.0\.1|localhost|\[::1\])(?::([1-9]\d{0,4}))?$/i,
+  );
+  if (!match) return false;
+  return match[1] === undefined
+    ? listeningPort === 80
+    : Number(match[1]) === listeningPort;
+}
+
 function validHostAuthority(
   request: import("node:http").IncomingMessage,
   listeningPort: number | undefined,
@@ -70,10 +83,7 @@ function validHostAuthority(
     }
   }
   if (hosts.length !== 1) return false;
-  const match = hosts[0].match(
-    /^(?:127\.0\.0\.1|localhost|\[::1\]):([1-9]\d{0,4})$/i,
-  );
-  return match !== null && Number(match[1]) === listeningPort;
+  return isAllowedHostAuthority(hosts[0], listeningPort);
 }
 
 const hopByHopHeaders = new Set([

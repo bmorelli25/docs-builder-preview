@@ -216,6 +216,61 @@ Build: exit 0
 git diff --check: exit 0
 ```
 
+## Port 80 Host and stdio-drain follow-up
+
+Status: DONE
+
+### Red evidence
+
+The new Host helper test initially failed because omitted ports were always
+rejected:
+
+```text
+npm test -- test/server.test.ts test/cli.test.ts
+
+Test Files  1 failed | 1 passed (2)
+Tests  1 failed | 27 passed (28)
+TypeError: isAllowedHostAuthority is not a function
+```
+
+The first child fixture wrote stderr directly and did not reliably expose the
+`exit`/`close` ordering race. It was replaced with a deterministic fixture
+whose short-lived grandchild inherits stderr, writes the final line after the
+owned child exits, and only then closes the pipe:
+
+```text
+npm test -- test/cli.test.ts -t "includes final drained stderr"
+
+Test Files  1 failed (1)
+Tests  1 failed | 11 skipped (12)
+AssertionError: expected [] to include 'stderr: final stderr before close'
+```
+
+### Implementation
+
+- Loopback Host authorities may omit the port only when the actual listening
+  port is HTTP port 80.
+- `127.0.0.1:80`, `localhost:80`, and `[::1]:80` remain valid explicit forms.
+- Every non-default port still requires an explicit numerically matching port.
+- The owned docs-builder public `exit` promise now resolves from the child's
+  one-shot `close` event, after stdio streams close, instead of the earlier
+  `exit` event.
+- Readiness checks and `stop()` still use process exit state/events, so waiting
+  for stdio drain does not delay termination escalation or startup failure
+  detection.
+
+### Green evidence
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+
+Test Files  9 passed (9)
+Tests  121 passed (121)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
 ## Host authority and builder-exit follow-up
 
 Status: DONE

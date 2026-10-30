@@ -158,7 +158,7 @@ export async function ensureDocsBuilder(
   });
   let intentionalStop = false;
   const exit = new Promise<DocsBuilderExit>((resolve) => {
-    child.once("exit", (code, signal) => {
+    child.once("close", (code, signal) => {
       resolve({ code, signal, intentional: intentionalStop });
     });
   });

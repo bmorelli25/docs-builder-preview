@@ -342,6 +342,34 @@ git diff --check: exit 0
 
 Concern: the real docs-content smoke test was not rerun during this follow-up.
 
+## Drained runtime failure status follow-up
+
+Status: DONE
+
+- CLI monitoring still consumes the same owned-handle `exit` promise, but that
+  promise now resolves only after child stdio drains.
+- The deterministic integration fixture exits the owned process with code 13
+  while a descendant keeps stderr open and writes
+  `final stderr before close`.
+- The first SSE refresh to failed state now occurs after that final line reaches
+  the CLI log callback.
+- The first fetched failed status includes both the code 13 error and the final
+  stderr line. No second refresh or race-dependent retry is needed.
+- Intentional stop remains marked before SIGTERM and is ignored by the runtime
+  failure monitor.
+
+Final verification:
+
+```text
+Test Files  9 passed (9)
+Tests  121 passed (121)
+TypeScript typecheck: exit 0
+Build: exit 0
+git diff --check: exit 0
+```
+
+Concern: the real docs-content smoke test was not rerun during this follow-up.
+
 ## Runtime builder-exit monitoring follow-up
 
 Status: DONE

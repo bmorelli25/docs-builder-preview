@@ -14,9 +14,10 @@ import {
   type CliRuntime,
   type RecursiveWatchFactory,
 } from "../src/cli.js";
-import type {
-  DocsBuilderHandle,
-  DocsBuilderOptions,
+import {
+  ensureDocsBuilder,
+  type DocsBuilderHandle,
+  type DocsBuilderOptions,
 } from "../src/docs-builder.js";
 
 const execFileAsync = promisify(execFile);
@@ -394,6 +395,72 @@ describe("runCli", () => {
     expect(status.error).toBe(
       "docs-builder exited unexpectedly with signal SIGKILL",
     );
+  });
+
+  it("includes final drained stderr in the first failed builder status", async () => {
+    const repositoryPath = await createFixtureRepository();
+    const script = join(repositoryPath, "runtime-builder.cjs");
+    await writeFile(
+      script,
+      `const http = require("node:http");
+const { spawn } = require("node:child_process");
+const index = process.argv.indexOf("--port");
+const port = Number(process.argv[index + 1]);
+const server = http.createServer((req, res) => {
+  res.setHeader("content-type", "text/html");
+  if (req.url === "/exit") {
+    res.end("exiting");
+    server.close(() => {
+      spawn(
+        process.execPath,
+        ["-e", "setTimeout(() => { process.stderr.write('final stderr before close\\\\n'); }, 100)"],
+        { stdio: ["ignore", "ignore", "inherit"] },
+      );
+      process.exit(13);
+    });
+    return;
+  }
+  res.end("<script src='/__livereloadscript'></script>");
+});
+server.listen(port, "127.0.0.1");`,
+    );
+    const builderPort = await unusedPort();
+    const runtime = await runCli(
+      {
+        repositoryPath,
+        base: "main",
+        port: await unusedPort(),
+        fetch: false,
+        open: false,
+      },
+      {
+        ensureDocsBuilder: (options) =>
+          ensureDocsBuilder({
+            ...options,
+            port: builderPort,
+            existingOnly: false,
+            command: process.execPath,
+            args: [script],
+            timeoutMs: 4_000,
+          }),
+      },
+    );
+    runtimes.push(runtime);
+    const events = await fetch(`${runtime.url}/api/events`);
+    const reader = events.body!.getReader();
+    await readUntil(reader, "event: connected");
+
+    await fetch(`http://127.0.0.1:${builderPort}/exit`);
+    await readUntil(reader, "event: refresh");
+    await reader.cancel();
+
+    const status = await fetch(`${runtime.url}/api/docs-builder`).then(
+      (response) => response.json(),
+    );
+    expect(status.error).toBe(
+      "docs-builder exited unexpectedly with code 13",
+    );
+    expect(status.logs).toContain("stderr: final stderr before close");
   });
 
   it("serves a fixture review, attaches snippet consumers, and refreshes after edits", async () => {

@@ -7,7 +7,11 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ReviewModel } from "../src/model.js";
-import { startReviewServer, type RunningServer } from "../src/server.js";
+import {
+  isAllowedHostAuthority,
+  startReviewServer,
+  type RunningServer,
+} from "../src/server.js";
 
 const running: Array<{ close(): Promise<void> }> = [];
 
@@ -122,6 +126,22 @@ async function readUntil(
 }
 
 describe("startReviewServer", () => {
+  it("accepts omitted loopback Host ports only for HTTP port 80", () => {
+    for (const host of ["127.0.0.1", "localhost", "[::1]"]) {
+      expect(isAllowedHostAuthority(host, 80), host).toBe(true);
+      expect(isAllowedHostAuthority(`${host}:80`, 80), `${host}:80`).toBe(
+        true,
+      );
+      expect(isAllowedHostAuthority(host, 4173), `${host} without port`).toBe(
+        false,
+      );
+      expect(
+        isAllowedHostAuthority(`${host}:4173`, 4173),
+        `${host}:4173`,
+      ).toBe(true);
+    }
+  });
+
   it("serves startup and failure status before docs-builder is available", async () => {
     const server = await startReviewServer({ review, port: 0 });
     running.push(server);
@@ -383,6 +403,9 @@ describe("startReviewServer", () => {
 
     for (const host of [
       "evil.example",
+      "127.0.0.1",
+      "localhost",
+      "[::1]",
       `127.0.0.1:${server.port + 1}`,
       `127.0.0.1:${server.port}:80`,
       undefined,
