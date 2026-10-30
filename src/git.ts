@@ -175,6 +175,15 @@ function parseNameStatus(output: string): NameStatus[] {
   for (let index = 0; index < fields.length; ) {
     const code = fields[index++];
     if (!code) break;
+    if (code[0] === "U") {
+      const path = fields[index++];
+      if (path === undefined) {
+        throw new Error("Malformed Git name-status output");
+      }
+      throw new Error(
+        `Git conflict in "${path}". Resolve Git conflicts before previewing.`,
+      );
+    }
     const status = statusFromCode(code);
 
     if (status === "renamed" || status === "copied") {
@@ -470,6 +479,15 @@ export async function buildReview(
   const mergeBase = (
     await git(gitRoot, ["merge-base", "HEAD", baseRef])
   ).trim();
+  parseNameStatus(
+    await git(gitRoot, [
+      "diff",
+      "--name-status",
+      "--diff-filter=U",
+      "-z",
+      "--",
+    ]),
+  );
   const tracked = parseNameStatus(
     await git(gitRoot, [
       "diff",

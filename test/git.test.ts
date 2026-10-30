@@ -58,6 +58,30 @@ async function commitAll(repositoryPath: string, message: string) {
 }
 
 describe("buildReview", () => {
+  it("reports an actionable error for an unmerged file", async () => {
+    const repositoryPath = await createRepository();
+    await write(repositoryPath, "docs/conflicted.md", "base\n");
+    await commitAll(repositoryPath, "base");
+
+    await git(repositoryPath, "switch", "-c", "other");
+    await write(repositoryPath, "docs/conflicted.md", "other branch\n");
+    await commitAll(repositoryPath, "other change");
+
+    await git(repositoryPath, "switch", "main");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/conflicted.md", "feature branch\n");
+    await commitAll(repositoryPath, "feature change");
+    await expect(
+      git(repositoryPath, "merge", "other"),
+    ).rejects.toThrow();
+
+    await expect(
+      buildReview(repositoryPath, "main", false),
+    ).rejects.toThrow(
+      'Git conflict in "docs/conflicted.md". Resolve Git conflicts before previewing.',
+    );
+  });
+
   it("combines committed, staged, and unstaged Markdown changes from the merge base", async () => {
     const repositoryPath = await createRepository();
     await write(repositoryPath, "docs/modified.md", "old paragraph\n");
