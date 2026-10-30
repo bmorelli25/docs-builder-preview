@@ -128,37 +128,55 @@ export const parentHighlighterScript = `(() => {
     stylesheet.href = "/_review/highlight.css";
     (frameDocument.head || frameDocument.documentElement).append(stylesheet);
     const elements = [...frameDocument.querySelectorAll(
-      "main p, main h1, main h2, main h3, main h4, main h5, main h6, main li, main pre, main blockquote, main td, main th, article p, article h1, article h2, article h3, article h4, article h5, article h6, article li, article pre, article blockquote, article td, article th"
+      "main p, main h1, main h2, main h3, main h4, main h5, main h6, main li, main pre, main blockquote, main td, main th, main tr, article p, article h1, article h2, article h3, article h4, article h5, article h6, article li, article pre, article blockquote, article td, article th, article tr"
     )];
     const available = new Set(elements);
     const matched = [];
     const unmatched = [];
-    const uniqueExact = (text) => {
-      const candidates = elements.filter(
-        (element) => available.has(element) &&
-          normalize(element.textContent || "") === text
-      );
-      return candidates.length === 1 ? candidates[0] : null;
+    const elementText = (element) => element.localName === "tr"
+      ? [...element.cells].map((cell) => cell.textContent || "").join(" ")
+      : element.textContent || "";
+    const pick = (block, matches) => {
+      const candidates = elements.filter(matches);
+      const leaves = candidates.filter((candidate) => !candidates.some(
+        (other) => other !== candidate && candidate.contains(other)
+      ));
+      const open = leaves.filter((leaf) => available.has(leaf));
+      if (open.length === 1) return open[0];
+      const ordinal = block.occurrences === leaves.length ? leaves[block.occurrence] : null;
+      return ordinal && available.has(ordinal) ? ordinal : null;
     };
-    const uniqueTokenMatch = (text) => {
-      const wanted = tokens(text);
-      if (wanted.length < 3) return null;
-      const candidates = elements.filter((element) => {
-        if (!available.has(element)) return false;
-        const actual = tokens(element.textContent || "");
-        if (actual.length < wanted.length) return false;
-        for (let start = 0; start <= actual.length - wanted.length; start++) {
-          if (wanted.every((token, offset) => token === actual[start + offset])) {
-            return true;
+    const uniqueExact = (block, text) => pick(
+      block,
+      (element) => normalize(elementText(element)) === text
+    );
+    const containsInOrder = (actual, segments) => {
+      let from = 0;
+      for (const segment of segments) {
+        let found = -1;
+        for (let start = from; start <= actual.length - segment.length; start++) {
+          if (segment.every((token, offset) => token === actual[start + offset])) {
+            found = start;
+            break;
           }
         }
-        return false;
+        if (found === -1) return false;
+        from = found + segment.length;
+      }
+      return true;
+    };
+    const uniqueTokenMatch = (block, text) => {
+      const segments = text.split("\\uFFFC").map(tokens).filter((segment) => segment.length);
+      const total = segments.reduce((sum, segment) => sum + segment.length, 0);
+      if (total < 3) return null;
+      return pick(block, (element) => {
+        const actual = tokens(elementText(element));
+        return actual.length >= total && containsInOrder(actual, segments);
       });
-      return candidates.length === 1 ? candidates[0] : null;
     };
     for (const block of file.blocks || []) {
       const text = normalize(block.text || "");
-      const element = text && (uniqueExact(text) || uniqueTokenMatch(text));
+      const element = text && (uniqueExact(block, text) || uniqueTokenMatch(block, text));
       if (!element) {
         unmatched.push(block);
         continue;

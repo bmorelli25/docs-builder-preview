@@ -199,6 +199,9 @@ function stripLinkDestinations(source: string): string {
   return visible;
 }
 
+/** Stands in for link text docs-builder generates, such as `[](/page.md)` titles. */
+export const generatedTextGap = "\uFFFC";
+
 export function normalizeVisibleText(
   source: string,
   substitutions: Record<string, string> = {},
@@ -207,7 +210,8 @@ export function normalizeVisibleText(
     .replace(/\{\{([^{}\r\n]+)\}\}/g, (token, key: string) =>
       Object.hasOwn(substitutions, key) ? substitutions[key] : token,
     )
-    .replace(/\{(?:applies_to|icon)\}\s*`[^`\r\n]*`/g, "");
+    .replace(/\{(?:applies_to|icon)\}\s*`[^`\r\n]*`/g, "")
+    .replace(/(?<!!)\[\]\([^()\s]*\)/g, ` ${generatedTextGap} `);
   const sourceLines = expandedSource.split(/\r?\n/);
   const openingFence = sourceLines[0]?.match(/^\s*(`{3,}|~{3,})(.*)$/);
   if (
@@ -304,9 +308,14 @@ function isSetextUnderline(line: string): boolean {
   return /^\s*(?:=+|-+)\s*$/.test(line);
 }
 
+function isTableRow(line: string): boolean {
+  return /^\s{0,3}\|/.test(line);
+}
+
 function startsBlock(line: string): boolean {
   return (
     /^\s{0,3}#{1,6}(?:\s+|$)/.test(line) ||
+    isTableRow(line) ||
     listItem.test(line) ||
     isThematicBreak(line) ||
     Boolean(fenceAt(line)) ||
@@ -328,8 +337,11 @@ function findSetextUnderline(
 export function segmentMarkdown(source: string): SourceBlock[] {
   const lines = source.split(/\r?\n/);
   const blocks: SourceBlock[] = [];
+  const frontmatterEnd = /^---\s*$/.test(lines[0] ?? "")
+    ? lines.findIndex((line, index) => index > 0 && /^---\s*$/.test(line))
+    : -1;
 
-  for (let index = 0; index < lines.length; ) {
+  for (let index = frontmatterEnd + 1; index < lines.length; ) {
     if (!lines[index].trim()) {
       index++;
       continue;
@@ -429,6 +441,13 @@ export function segmentMarkdown(source: string): SourceBlock[] {
       }
       const candidate = block("list-item", lines, start, index - 1);
       if (candidate) blocks.push(candidate);
+      continue;
+    }
+
+    if (isTableRow(lines[index])) {
+      const candidate = block("paragraph", lines, index, index);
+      if (candidate) blocks.push(candidate);
+      index++;
       continue;
     }
 

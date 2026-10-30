@@ -10,6 +10,9 @@ export interface ChangedBlock {
   startLine: number;
   endLine: number;
   source: string;
+  /** Zero-based position among blocks in the file with identical visible text. */
+  occurrence?: number;
+  occurrences?: number;
 }
 
 export interface DeletedHunk {

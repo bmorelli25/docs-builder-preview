@@ -9,6 +9,10 @@ export const reviewStyles = `
   outline: 2px solid #ca8a04;
   outline-offset: 2px;
 }
+tr[data-docs-review-mark] > td,
+tr[data-docs-review-mark] > th {
+  background: transparent !important;
+}
 .deleted-inline {
   margin: 10px 0;
   padding: 10px 12px;

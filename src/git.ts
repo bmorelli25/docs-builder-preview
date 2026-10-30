@@ -414,12 +414,17 @@ function semanticChangedBlocks(
         ? "added"
         : "modified";
 
+    const twins = semanticBlocks.filter(({ text }) => text === block.text);
     return [
       {
         kind,
         startLine: block.startLine,
         endLine: block.endLine,
         source: block.source,
+        ...(twins.length > 1 && {
+          occurrence: twins.indexOf(block),
+          occurrences: twins.length,
+        }),
       },
     ];
   });

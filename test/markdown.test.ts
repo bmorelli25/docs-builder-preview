@@ -6,6 +6,25 @@ import {
 } from "../src/markdown.js";
 
 describe("segmentMarkdown", () => {
+  it("segments each table row as its own block", () => {
+    const source = [
+      "Intro text.",
+      "| Feature | Hosted |",
+      "| --- | --- |",
+      "| **Agent Builder** | ✅ |",
+      "| AI Assistant | ✅ (deprecated) |",
+    ].join("\n");
+
+    expect(
+      segmentMarkdown(source).map(({ startLine, text }) => [startLine, text]),
+    ).toEqual([
+      [1, "Intro text."],
+      [2, "Feature Hosted"],
+      [4, "Agent Builder ✅"],
+      [5, "AI Assistant ✅ (deprecated)"],
+    ]);
+  });
+
   it("segments rendered semantic blocks with source line ranges", () => {
     const source = [
       "# Get started",
@@ -75,7 +94,7 @@ describe("segmentMarkdown", () => {
     ]);
   });
 
-  it("keeps ambiguous block quotes and tables together as paragraphs", () => {
+  it("keeps block quotes together and splits tables into rows", () => {
     const source = [
       "> Quoted **text**",
       "> remains together.",
@@ -92,12 +111,8 @@ describe("segmentMarkdown", () => {
         endLine: 2,
         text: "Quoted text remains together.",
       },
-      {
-        kind: "paragraph",
-        startLine: 4,
-        endLine: 6,
-        text: "Name Value one two",
-      },
+      { kind: "paragraph", startLine: 4, endLine: 4, text: "Name Value" },
+      { kind: "paragraph", startLine: 6, endLine: 6, text: "one two" },
     ]);
   });
 
@@ -287,6 +302,14 @@ describe("segmentMarkdown", () => {
 });
 
 describe("normalizeVisibleText", () => {
+  it("marks empty link text that docs-builder fills with the page title", () => {
+    expect(
+      normalizeVisibleText(
+        "| **[AI Assistant](/ai.md)** | ✅ | Refer to [](/compare.md). |",
+      ),
+    ).toBe("AI Assistant ✅ Refer to \uFFFC .");
+  });
+
   it("expands exact known docset substitutions and preserves unknown tokens", () => {
     expect(
       normalizeVisibleText(
