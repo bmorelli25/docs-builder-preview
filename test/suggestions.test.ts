@@ -202,6 +202,15 @@ describe("formatSuggestionsExport", () => {
     expect(markdown).toContain("> (delete)");
     expect(markdown).toContain("{{kib}} might prompt you.");
     expect(markdown).toContain("Note: original text was not found");
+    expect(markdown).toMatch(/substitutions such as \{\{[\w.-]+\}\}/i);
+    expect(markdown).toMatch(/links/i);
+    expect(markdown).toMatch(/Replace/i);
+    expect(markdown).toContain(
+      "New text is the desired wording as it appeared in the preview",
+    );
+    expect(markdown).toContain(
+      "unless the suggestion explicitly says to remove or change them",
+    );
   });
 });
 

@@ -67,6 +67,58 @@ describe("locateQuoteInMarkdown", () => {
     });
   });
 
+  it("keeps {{substitutions}} in section headings instead of gap placeholders", () => {
+    const source = [
+      "## Compare {{ech}} and Serverless",
+      "",
+      "Choose the deployment type that fits your workload.",
+    ].join("\n");
+
+    expect(
+      locateQuoteInMarkdown(
+        "guide.md",
+        source,
+        {
+          exact: "Choose the deployment type that fits your workload.",
+          prefix: "",
+          suffix: "",
+        },
+        { ech: "Elastic Cloud Hosted" },
+      ),
+    ).toMatchObject({
+      heading: "Compare Elastic Cloud Hosted and Serverless",
+      found: true,
+    });
+
+    expect(
+      locateQuoteInMarkdown(
+        "guide.md",
+        source,
+        {
+          exact: "Choose the deployment type that fits your workload.",
+          prefix: "",
+          suffix: "",
+        },
+        {},
+      ),
+    ).toMatchObject({
+      heading: "Compare {{ech}} and Serverless",
+      found: true,
+    });
+    expect(
+      locateQuoteInMarkdown(
+        "guide.md",
+        source,
+        {
+          exact: "Choose the deployment type that fits your workload.",
+          prefix: "",
+          suffix: "",
+        },
+        {},
+      )?.heading,
+    ).not.toMatch(/\uFFFC/);
+  });
+
   it("matches link labels without the destination", () => {
     const source = "See [Manage access](../manage.md) for privileges.";
     expect(

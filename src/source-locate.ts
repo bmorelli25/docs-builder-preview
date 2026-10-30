@@ -63,14 +63,46 @@ function visible(source: string, substitutions: Record<string, string>): string 
   return normalizeSpace(normalizeVisibleText(source, substitutions));
 }
 
+/**
+ * Build a section label from heading source. Expands known docset
+ * substitutions and keeps unknown `{{keys}}` as written, instead of the
+ * U+FFFC gaps normalizeVisibleText uses for matching rendered preview text.
+ */
+export function headingLabel(
+  source: string,
+  substitutions: Record<string, string> = {},
+): string {
+  const placeholders: string[] = [];
+  const protectedSource = source.replace(
+    /\{\{([^{}\r\n]+)\}\}/g,
+    (token, key: string) => {
+      const trimmed = key.trim();
+      if (Object.hasOwn(substitutions, trimmed)) return substitutions[trimmed];
+      if (Object.hasOwn(substitutions, key)) return substitutions[key];
+      const index = placeholders.length;
+      placeholders.push(token);
+      return `\uE010${index}\uE011`;
+    },
+  );
+  let label = normalizeVisibleText(protectedSource, {});
+  for (const [index, token] of placeholders.entries()) {
+    label = label.replaceAll(`\uE010${index}\uE011`, token);
+  }
+  return normalizeSpace(label.replaceAll("\uFFFC", " ").replace(/\s+/g, " "));
+}
+
 function nearestHeading(
   blocks: SourceBlock[],
   startLine: number,
+  substitutions: Record<string, string> = {},
 ): string | undefined {
   let heading: string | undefined;
   for (const block of blocks) {
     if (block.startLine > startLine) break;
-    if (block.kind === "heading") heading = block.text || undefined;
+    if (block.kind === "heading") {
+      const label = headingLabel(block.source, substitutions);
+      heading = label || undefined;
+    }
   }
   return heading;
 }
@@ -157,7 +189,7 @@ function locateInSource(
     startLine,
     endLine,
     source: excerpt,
-    heading: nearestHeading(blocks, startLine),
+    heading: nearestHeading(blocks, startLine, substitutions),
     exact: normalizeSpace(quote.exact),
     found: true,
   };
@@ -282,7 +314,11 @@ export async function createSourceLocator(options: {
         startLine: 1,
         endLine: 1,
         source: exact,
-        heading: nearestHeading(blocks, Number.POSITIVE_INFINITY),
+        heading: nearestHeading(
+          blocks,
+          Number.POSITIVE_INFINITY,
+          substitutions(),
+        ),
         exact,
         found: false,
       };

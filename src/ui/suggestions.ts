@@ -272,12 +272,24 @@ export const suggestionDashboardStyles = `
       margin-top: 4px;
       padding: 1px 6px;
       border-radius: 999px;
-      background: #e2e8f0;
-      color: #334155;
+      background: #dbeafe;
+      color: #1d4ed8;
       font-size: 10px;
       font-weight: 700;
       letter-spacing: .03em;
       text-transform: uppercase;
+    }
+    .suggestion-item-kind[data-kind="replace"] {
+      background: #dbeafe;
+      color: #1d4ed8;
+    }
+    .suggestion-item-kind[data-kind="instruction"] {
+      background: #fae8ff;
+      color: #a21caf;
+    }
+    .suggestion-item-kind[data-kind="delete"] {
+      background: #fee2e2;
+      color: #b91c1c;
     }
     .suggestion-editor {
       position: fixed;
@@ -485,6 +497,9 @@ export const suggestionScript = `
           : truncate(suggestion.newText || suggestion.quote.exact);
         const kind = document.createElement("span");
         kind.className = "suggestion-item-kind";
+        kind.dataset.kind = suggestion.kind === "instruction" || suggestion.kind === "delete"
+          ? suggestion.kind
+          : "replace";
         kind.textContent = kindLabel(suggestion.kind) + (suggestion.location?.found === false ? " · missing" : "");
         item.append(pathEl, previewEl, kind);
         item.addEventListener("click", () => jumpToSuggestion(suggestion));
