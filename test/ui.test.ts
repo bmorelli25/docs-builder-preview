@@ -4,6 +4,7 @@ import type { ChangedFile, ReviewModel } from "../src/model.js";
 import { createDashboard } from "../src/ui/dashboard.js";
 import {
   createHighlighterData,
+  createSourceHref,
   parentHighlighterScript,
 } from "../src/ui/highlighter.js";
 import { reviewStyles } from "../src/ui/styles.js";
@@ -308,7 +309,12 @@ describe("generated browser assets", () => {
     expect(data).toContain("\\u003c/script\\u003e");
     expect(JSON.parse(data)).toMatchObject({
       repositoryPath: "/canonical/repository",
-      files: [{ path: "index.md" }],
+      files: [
+        {
+          path: "index.md",
+          sourceBase: "vscode://file/canonical/repository/index.md",
+        },
+      ],
     });
   });
 
@@ -346,11 +352,33 @@ describe("generated browser assets", () => {
     expect(parentHighlighterScript).toContain("unmatched");
     expect(parentHighlighterScript).toContain("mapping-status");
     expect(parentHighlighterScript).toContain("Open source");
-    expect(parentHighlighterScript).toContain("vscode://file");
+    expect(parentHighlighterScript).toContain("file.sourceBase");
     expect(parentHighlighterScript).toContain("deleted-inline");
     expect(parentHighlighterScript).toContain("nearest");
     expect(parentHighlighterScript).toContain("deleted-fallback");
+    expect(parentHighlighterScript).toContain('createElement("link")');
+    expect(parentHighlighterScript).toContain('rel = "stylesheet"');
+    expect(parentHighlighterScript).toContain(
+      'href = "/_review/highlight.css"',
+    );
+    expect(parentHighlighterScript).not.toContain('createElement("style")');
+    expect(parentHighlighterScript).not.toContain("style.textContent");
     expect(parentHighlighterScript).not.toContain("EventSource");
+  });
+
+  it("encodes every Open source path segment and preserves separators", () => {
+    expect(
+      createSourceHref(
+        "/Users/Brändon/My #repo",
+        "docs/100% ready?/a b#.md",
+        42,
+      ),
+    ).toBe(
+      "vscode://file/Users/Br%C3%A4ndon/My%20%23repo/docs/100%25%20ready%3F/a%20b%23.md:42",
+    );
+    expect(createSourceHref("/repo", "guide.md", Number.NaN)).toBe(
+      "vscode://file/repo/guide.md:1",
+    );
   });
 
   it("keeps malicious upstream code outside the trusted runtime", () => {

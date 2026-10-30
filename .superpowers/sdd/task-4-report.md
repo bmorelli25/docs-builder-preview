@@ -324,3 +324,49 @@ npm test && npm run typecheck && npm run build && git diff --check
 ```
 
 Result: exit 0, 9 test files passed and 100 tests passed, TypeScript typecheck and build completed, and Git reported no whitespace errors. The first full run exposed one stale CLI assertion that expected snippet source injection into proxied HTML; the integration test now verifies that source remains in trusted dashboard data while the proxied page is unchanged.
+
+## CSP-safe highlights and source URLs
+
+### Red
+
+Focused command:
+
+```text
+npm test -- test/server.test.ts test/ui.test.ts
+```
+
+Result: exit 1, 4 tests failed and 24 passed. The app had no dedicated highlight stylesheet endpoint, the parent still created an inline style element, review data had no encoded source base, and reserved-character Open source URLs were not safely constructed.
+
+### Green
+
+Focused command:
+
+```text
+npm test -- test/server.test.ts test/ui.test.ts
+```
+
+Result: exit 0, 2 test files passed and 28 tests passed.
+
+Type verification:
+
+```text
+npm run typecheck
+```
+
+Result: exit 0.
+
+### Self-review
+
+- `/_review/highlight.css` is app-owned and returns the existing highlight/deletion CSS as `text/css; charset=utf-8` with `X-Content-Type-Options: nosniff` and no CORS.
+- The parent inserts a same-origin `<link rel="stylesheet" href="/_review/highlight.css">` into the iframe document. It no longer creates inline style elements, so strict upstream `style-src 'self'` policies permit highlights.
+- Proxied CSP headers remain intact, and the iframe still excludes `allow-scripts`.
+- Open source bases are built from the canonical repository and file paths by encoding each slash-delimited segment independently. Spaces, `#`, `?`, `%`, and Unicode are encoded while separators remain `/`.
+- Source lines are restricted to positive safe integers and otherwise fall back to line 1.
+
+Full verification:
+
+```text
+npm test && npm run typecheck && npm run build && git diff --check
+```
+
+Result: exit 0, 9 test files passed and 104 tests passed, TypeScript typecheck and build completed, and Git reported no whitespace errors.

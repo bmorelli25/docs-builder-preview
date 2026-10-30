@@ -63,6 +63,7 @@ async function fakeUpstream(): Promise<{
     requests.push(request.url ?? "");
     if (request.url === "/guide" || request.url === "/docs/guide") {
       response.setHeader("content-type", "text/html; charset=utf-8");
+      response.setHeader("content-security-policy", "style-src 'self'");
       response.end(
         '<!doctype html><html><body><main>Guide</main><script>window.__maliciousDocsScript = true</script></body></html>',
       );
@@ -152,12 +153,31 @@ describe("startReviewServer", () => {
 
     const page = await fetch(`${server.url}/guide`);
     expect(page.headers.get("access-control-allow-origin")).toBeNull();
+    expect(page.headers.get("content-security-policy")).toBe("style-src 'self'");
     const html = await page.text();
     expect(html).toContain("<main>Guide</main>");
     expect(html).toContain("window.__maliciousDocsScript = true");
     expect(html).not.toContain("data-docs-review-styles");
     expect(html).not.toContain("data-docs-review-highlighter");
     expect(html).not.toContain("new EventSource");
+  });
+
+  it("serves dedicated same-origin highlight CSS for strict CSP pages", async () => {
+    const upstream = await fakeUpstream();
+    const server = await start(upstream.url);
+
+    const response = await fetch(`${server.url}/_review/highlight.css`, {
+      headers: { origin: "null" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/css");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+    expect(await response.text()).toContain(
+      '[data-docs-review-mark="added"]',
+    );
+    expect(upstream.requests).toEqual([]);
   });
 
   it("uses a validated snippet selector for the trusted parent highlighter", async () => {

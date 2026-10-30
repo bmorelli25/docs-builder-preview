@@ -1,6 +1,5 @@
 import type { ReviewModel } from "../model.js";
 import { normalizeVisibleText } from "../markdown.js";
-import { reviewStyles } from "./styles.js";
 
 export function safeJson(value: unknown): string {
   return JSON.stringify(value)
@@ -11,11 +10,36 @@ export function safeJson(value: unknown): string {
     .replace(/\u2029/g, "\\u2029");
 }
 
+function createSourceBase(
+  repositoryPath: string,
+  filePath: string,
+): string {
+  const repository = repositoryPath
+    .replaceAll("\\", "/")
+    .replace(/\/+$/, "");
+  const path = filePath.replaceAll("\\", "/").replace(/^\/+/, "");
+  const encodedPath = `${repository}/${path}`
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `vscode://file${encodedPath.startsWith("/") ? "" : "/"}${encodedPath}`;
+}
+
+export function createSourceHref(
+  repositoryPath: string,
+  filePath: string,
+  line: number,
+): string {
+  const safeLine = Number.isSafeInteger(line) && line > 0 ? line : 1;
+  return `${createSourceBase(repositoryPath, filePath)}:${safeLine}`;
+}
+
 export function createHighlighterData(review: ReviewModel): string {
   return safeJson({
     repositoryPath: review.repositoryPath,
     files: review.files.map((file) => ({
       ...file,
+      sourceBase: createSourceBase(review.repositoryPath, file.path),
       blocks: file.blocks.map((block) => ({
           ...block,
           text: normalizeVisibleText(block.source),
@@ -39,7 +63,6 @@ export const parentHighlighterScript = `(() => {
   const unmatchedPanel = document.getElementById("unmatched-panel");
   const unmatchedList = document.getElementById("unmatched-list");
   const deletedFallback = document.getElementById("deleted-fallback");
-  const highlightStyles = ${safeJson(reviewStyles)};
   previous.textContent = "Previous";
   next.textContent = "Next";
   openSource.textContent = "Open source";
@@ -49,15 +72,8 @@ export const parentHighlighterScript = `(() => {
     .trim()
     .toLocaleLowerCase();
   const tokens = (value) => normalize(value).match(/[\\p{L}\\p{N}]+/gu) || [];
-  const sourceHref = (file, line) => {
-    const repository = String(reviewData.repositoryPath || "")
-      .replaceAll("\\\\", "/")
-      .replace(/\\/$/, "");
-    const path = String(file.path || "").replaceAll("\\\\", "/").replace(/^\\/+/, "");
-    const fullPath = repository + "/" + path;
-    return "vscode://file" + (fullPath.startsWith("/") ? "" : "/") +
-      encodeURI(fullPath) + ":" + line;
-  };
+  const sourceHref = (file, line) =>
+    file.sourceBase + ":" + (Number.isSafeInteger(line) && line > 0 ? line : 1);
   const mappingStatus = (link, matched, unmatched) => {
     const indicator = link?.querySelector(".mapping-status");
     if (!indicator) return;
@@ -83,10 +99,11 @@ export const parentHighlighterScript = `(() => {
       mappingStatus(link, 0, file?.blocks?.length || 0);
       return;
     }
-    const style = frameDocument.createElement("style");
-    style.dataset.docsReviewStyles = "";
-    style.textContent = highlightStyles;
-    (frameDocument.head || frameDocument.documentElement).append(style);
+    const stylesheet = frameDocument.createElement("link");
+    stylesheet.dataset.docsReviewStyles = "";
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = "/_review/highlight.css";
+    (frameDocument.head || frameDocument.documentElement).append(stylesheet);
     const elements = [...frameDocument.querySelectorAll(
       "main p, main h1, main h2, main h3, main h4, main h5, main h6, main li, main pre, main blockquote, main td, main th, article p, article h1, article h2, article h3, article h4, article h5, article h6, article li, article pre, article blockquote, article td, article th"
     )];

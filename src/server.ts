@@ -10,6 +10,7 @@ import type { DocsBuilderHandle } from "./docs-builder.js";
 import type { ChangedFile, ReviewModel } from "./model.js";
 import { sourcePathToRoute } from "./routes.js";
 import { createDashboard } from "./ui/dashboard.js";
+import { reviewStyles } from "./ui/styles.js";
 
 export interface ServerOptions {
   review: ReviewModel;
@@ -206,6 +207,10 @@ export async function startReviewServer(
         createDashboard(review),
         "text/html; charset=utf-8",
       );
+      return;
+    }
+    if (target.pathname === "/_review/highlight.css") {
+      send(response, 200, reviewStyles, "text/css; charset=utf-8");
       return;
     }
     if (target.pathname === "/api/review") {
