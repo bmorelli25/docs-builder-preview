@@ -29,9 +29,13 @@ describe("suggestions dashboard markup", () => {
     expect(dashboard).toContain('id="suggestions-clear-all"');
     expect(dashboard).toContain('id="suggestion-editor"');
     expect(dashboard).toContain('id="suggest-edits"');
+    expect(dashboard).toContain('class="suggestions-slot"');
     expect(dashboard).toContain('id="suggestions-data"');
     expect(dashboard).toContain(suggestionScript);
     expect(dashboard).toContain("Suggest edits");
     expect(dashboard).toContain("Copy all");
+    expect(dashboard).toMatch(
+      /<label class="deleted-control" for="suggest-edits">/,
+    );
   });
 });

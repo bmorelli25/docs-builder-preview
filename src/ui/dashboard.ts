@@ -343,7 +343,6 @@ export function createDashboard(
       border-bottom: 1px solid #e2e8f0;
       background: #fff;
       min-width: 0;
-      overflow: hidden;
     }
     .search-wrap { position: relative; }
     .search-wrap svg {
@@ -597,6 +596,13 @@ export function createDashboard(
       padding: 0;
       accent-color: #60a5fa;
     }
+    .suggestions-slot {
+      min-width: 0;
+      padding: 10px 14px;
+      border-bottom: 1px solid #e2e8f0;
+      background: #fff;
+    }
+    .sidebar-collapsed .suggestions-slot { display: none; }
     .preview-toolbar button, .preview-toolbar a {
       padding: 5px 8px;
       border: 1px solid #64748b;
@@ -704,8 +710,8 @@ export function createDashboard(
           </div>
           ${docsBuilderPanel}
           ${warningPanel}
-          ${suggestionsPanelMarkup(initialSuggestions)}
         </div>
+        <div class="suggestions-slot">${suggestionsPanelMarkup(initialSuggestions)}</div>
         <nav class="file-list" aria-label="Review files">
           ${groups || '<p class="no-results">No changed documentation files.</p>'}
           <p class="no-results" id="filter-empty" hidden>No files match these filters.</p>
@@ -724,7 +730,7 @@ export function createDashboard(
             <input id="hide-deleted-lines" type="checkbox">
             <span>Hide deleted lines</span>
           </label>
-          <label class="suggest-edits-control" for="suggest-edits">
+          <label class="deleted-control" for="suggest-edits">
             <input id="suggest-edits" type="checkbox" checked>
             <span>Suggest edits</span>
           </label>

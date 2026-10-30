@@ -94,7 +94,7 @@ h6 [data-suggestion-mark] {
 
 export const suggestionDashboardStyles = `
     .suggestions-panel {
-      margin: 0 0 10px;
+      margin: 0;
       padding: 10px;
       border: 1px solid #dbe3ef;
       border-radius: 10px;
@@ -284,17 +284,6 @@ export const suggestionDashboardStyles = `
       color: #64748b;
       font-size: 11px;
     }
-    .suggest-edits-control {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      margin-left: auto;
-      color: #e2e8f0;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .suggest-edits-control input { accent-color: #60a5fa; }
-    .sidebar-collapsed .suggestions-panel { display: none; }
 `;
 
 export const suggestionScript = `
@@ -322,8 +311,18 @@ export const suggestionScript = `
   let editingId = null;
   let saveOnBlur = true;
   let popover = null;
+  let popoverSuggestionId = null;
+  let ignoreSelectionUntil = 0;
 
   const enabled = () => suggestToggle.checked !== false;
+
+  const clearFrameSelection = () => {
+    try {
+      preview.contentDocument?.getSelection?.()?.removeAllRanges();
+    } catch {
+      // Ignore cross-document selection errors.
+    }
+  };
 
   const kindLabel = (kind) =>
     kind === "delete" ? "Delete" : kind === "instruction" ? "Instruction" : "Replace";
@@ -425,6 +424,9 @@ export const suggestionScript = `
   };
 
   const openEditor = (quote, rect, existing) => {
+    hidePopover();
+    clearFrameSelection();
+    ignoreSelectionUntil = Date.now() + 500;
     activeQuote = quote;
     editingId = existing?.id || null;
     editorText.value = existing
@@ -447,6 +449,8 @@ export const suggestionScript = `
     const text = editorText.value;
     const kind = text.trim() === "" ? "delete" : selectedKind();
     hideEditor();
+    clearFrameSelection();
+    ignoreSelectionUntil = Date.now() + 500;
     try {
       if (id) {
         const state = await api("/api/suggestions", {
@@ -636,12 +640,18 @@ export const suggestionScript = `
   const hidePopover = () => {
     popover?.remove();
     popover = null;
+    popoverSuggestionId = null;
   };
 
   const showPopover = (mark, suggestion) => {
     const doc = preview.contentDocument;
     if (!doc) return;
+    if (popover && popoverSuggestionId === suggestion.id) {
+      hidePopover();
+      return;
+    }
     hidePopover();
+    popoverSuggestionId = suggestion.id;
     popover = doc.createElement("div");
     popover.className = "suggestion-popover";
     popover.dataset.kind = suggestion.kind;
@@ -739,12 +749,13 @@ export const suggestionScript = `
   const onSelection = () => {
     if (!enabled() || !preview.contentDocument) return;
     if (!editor.hidden) return;
+    if (Date.now() < ignoreSelectionUntil) return;
     const selection = preview.contentDocument.getSelection?.();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
     const range = selection.getRangeAt(0);
     if (!preview.contentDocument.body?.contains(range.commonAncestorContainer)) return;
     if (range.toString().replace(/\\s+/g, " ").trim().length < 1) return;
-    if (range.commonAncestorContainer.parentElement?.closest?.("[data-suggestion-mark], .suggestion-popover")) {
+    if (range.commonAncestorContainer.parentElement?.closest?.("[data-suggestion-mark], .suggestion-popover, a[href]")) {
       return;
     }
     const quote = contextAround(preview.contentDocument, range);
@@ -766,9 +777,13 @@ export const suggestionScript = `
   };
 
   const onFrameClick = (event) => {
-    const mark = event.target instanceof Element
-      ? event.target.closest("[data-suggestion-mark]")
-      : null;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.closest("a[href]")) {
+      hidePopover();
+      return;
+    }
+    const mark = target.closest("[data-suggestion-mark]");
     if (mark) {
       event.preventDefault();
       event.stopPropagation();
@@ -776,7 +791,7 @@ export const suggestionScript = `
       if (suggestion) showPopover(mark, suggestion);
       return;
     }
-    if (popover && !popover.contains(event.target)) hidePopover();
+    if (popover && !popover.contains(target)) hidePopover();
   };
 
   const bindFrame = () => {
@@ -788,7 +803,13 @@ export const suggestionScript = `
     });
     doc.addEventListener("click", onFrameClick, true);
     doc.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && popover) hidePopover();
+      if (event.key === "Escape") {
+        if (popover) hidePopover();
+        if (!editor.hidden) {
+          saveOnBlur = false;
+          hideEditor();
+        }
+      }
     });
     markPage();
   };
@@ -804,25 +825,26 @@ export const suggestionScript = `
     }
   });
 
+  // Keep focus in the textarea when using Replace/Instruction so the editor
+  // does not save/close mid-edit. Still allow the radios to receive the click.
   editor.addEventListener("mousedown", (event) => {
-    if (event.target !== editorText) event.preventDefault();
+    if (!(event.target instanceof Element)) return;
+    if (event.target.closest('input[name="suggestion-kind"], .suggestion-kind label')) {
+      event.preventDefault();
+      const input = event.target.closest("label")?.querySelector("input")
+        || (event.target instanceof HTMLInputElement ? event.target : null);
+      if (input) input.checked = true;
+    }
   });
 
   document.addEventListener("mousedown", (event) => {
-    if (popover && !preview.contains(event.target)) hidePopover();
+    if (popover && !preview.contains(event.target) && !editor.contains(event.target)) {
+      hidePopover();
+    }
     if (editor.hidden) return;
     if (editor.contains(event.target)) return;
     if (saveOnBlur) void saveEditor();
     else hideEditor();
-  });
-
-  editor.addEventListener("focusout", (event) => {
-    if (editor.hidden) return;
-    if (editor.contains(event.relatedTarget)) return;
-    setTimeout(() => {
-      if (editor.hidden || editor.contains(document.activeElement)) return;
-      if (saveOnBlur) void saveEditor();
-    }, 0);
   });
 
   copyAll.addEventListener("click", async () => {
