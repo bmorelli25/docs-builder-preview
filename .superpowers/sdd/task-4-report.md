@@ -467,3 +467,36 @@ npm run test:e2e && npm test && npm run typecheck && npm run build && git diff -
 Result: exit 0. Chromium passed 1/1 test in 699 ms total (406 ms test time); Vitest passed 109/109 tests across 9 files; typecheck and build completed; Git reported no whitespace errors.
 
 After hardening fixture teardown to close the upstream even if review-server startup fails, the final `npm run test:e2e` passed 1/1 again in 766 ms total (406 ms test time).
+
+## Proxy shutdown and browser assertion hardening
+
+### Red
+
+Added a real never-ending upstream response regression and ran:
+
+```text
+npm test -- test/server.test.ts
+```
+
+Result: exit 1. The new shutdown test timed out after 250 ms because review-server shutdown did not disconnect the outbound upstream stream.
+
+### Green
+
+The proxy now tracks every active outbound `ClientRequest` and upstream `IncomingMessage`, removes completed/errored handles, and destroys remaining requests and responses during shutdown. The focused server suite passed 14/14 tests.
+
+The Playwright fixture now checks exact computed backgrounds and outlines for added and modified highlights. It verifies every inline deletion's previous sibling is the expected nearest matched block, and uses independent `Promise.allSettled` teardown with aggregated cleanup failures.
+
+### Self-review
+
+- Shutdown destroys both sides of active outbound proxy traffic before closing review-server connections. Closing an upstream response also resolves its proxy promise.
+- The regression uses a real HTTP stream, waits for its first chunk, then requires both `RunningServer.close()` completion and an observed upstream disconnect.
+- Playwright cleanup attempts the review server and fake upstream independently, even when either close rejects.
+- The iframe remains script-blocked, and no production browser behavior changed.
+
+Final verification:
+
+```text
+npm run test:e2e && npm test && npm run typecheck && npm run build && git diff --check
+```
+
+Result: exit 0. Chromium passed 1/1 test in 831 ms total (405 ms test time); Vitest passed 110/110 tests across 9 files; typecheck, build, and Git whitespace checks passed.

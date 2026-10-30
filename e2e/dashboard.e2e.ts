@@ -21,6 +21,33 @@ async function close(server: Server): Promise<void> {
   });
 }
 
+async function cleanup(
+  reviewServer: Awaited<ReturnType<typeof startReviewServer>> | undefined,
+  upstream: Server,
+): Promise<void> {
+  const resources = [
+    ...(reviewServer
+      ? [{ name: "review server", close: () => reviewServer.close() }]
+      : []),
+    { name: "fake upstream", close: () => close(upstream) },
+  ];
+  const results = await Promise.allSettled(
+    resources.map((resource) => resource.close()),
+  );
+  const failures = results.flatMap((result, index) =>
+    result.status === "rejected"
+      ? [
+          new Error(`Failed to close ${resources[index].name}`, {
+            cause: result.reason,
+          }),
+        ]
+      : [],
+  );
+  if (failures.length) {
+    throw new AggregateError(failures, "Browser fixture cleanup failed");
+  }
+}
+
 test("reviews changed pages safely in the integrated dashboard", async ({
   page,
 }) => {
@@ -82,8 +109,8 @@ test("reviews changed pages safely in the integrated dashboard", async ({
         ],
         deletedHunks: [
           {
-            oldStartLine: 2,
-            oldEndLine: 2,
+            oldStartLine: 4,
+            oldEndLine: 4,
             source: "Deleted near surviving content",
           },
         ],
@@ -160,6 +187,18 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     await expect(
       guide.locator('[data-docs-review-mark="modified"]'),
     ).toHaveCount(1);
+    await expect(
+      guide.locator('[data-docs-review-mark="added"]'),
+    ).toHaveCSS("background-color", "rgba(34, 197, 94, 0.24)");
+    await expect(
+      guide.locator('[data-docs-review-mark="added"]'),
+    ).toHaveCSS("outline", "rgb(22, 163, 74) solid 2px");
+    await expect(
+      guide.locator('[data-docs-review-mark="modified"]'),
+    ).toHaveCSS("background-color", "rgba(234, 179, 8, 0.27)");
+    await expect(
+      guide.locator('[data-docs-review-mark="modified"]'),
+    ).toHaveCSS("outline", "rgb(202, 138, 4) solid 2px");
     await expect(page.locator("#mapping-counts")).toHaveText(
       "2 matched · 1 unmatched",
     );
@@ -177,9 +216,23 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     await expect(openSource).toHaveAttribute("href", /:3$/);
     await page.locator("#review-previous").click();
     await expect(openSource).toHaveAttribute("href", /:1$/);
-    await expect(guide.locator(".deleted-inline")).toContainText(
-      "Deleted near surviving content",
-    );
+    expect(
+      await guide.locator(".deleted-inline").evaluateAll((deletions) =>
+        deletions.map((deletion) => ({
+          source: deletion.textContent,
+          previousMark: deletion.previousElementSibling?.getAttribute(
+            "data-docs-review-mark",
+          ),
+          previousText: deletion.previousElementSibling?.textContent,
+        })),
+      ),
+    ).toEqual([
+      {
+        source: "Deleted lines 4-4: Deleted near surviving content",
+        previousMark: "modified",
+        previousText: "Changed paragraph text",
+      },
+    ]);
 
     await page.locator('a[href="/fallback"]').click();
     await expect(page.locator("#deleted-fallback")).toContainText(
@@ -228,7 +281,6 @@ test("reviews changed pages safely in the integrated dashboard", async ({
       ),
     ).toHaveCount(1);
   } finally {
-    await reviewServer?.close();
-    await close(upstream);
+    await cleanup(reviewServer, upstream);
   }
 });

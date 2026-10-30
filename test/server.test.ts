@@ -437,4 +437,44 @@ describe("startReviewServer", () => {
     expect(result).toBe("closed");
   });
 
+  it("disconnects never-ending upstream responses during shutdown", async () => {
+    let markDisconnected!: () => void;
+    const disconnected = new Promise<void>((resolve) => {
+      markDisconnected = resolve;
+    });
+    const upstreamServer = createServer((_request, response) => {
+      response.setHeader("content-type", "text/event-stream");
+      response.write("data: connected\n\n");
+      response.once("close", markDisconnected);
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstreamServer.address();
+    if (!address || typeof address === "string") throw new Error("no address");
+    running.push({
+      close: () =>
+        new Promise<void>((resolve, reject) => {
+          upstreamServer.close((error) =>
+            error ? reject(error) : resolve(),
+          );
+          upstreamServer.closeAllConnections();
+        }),
+    });
+    const server = await start(`http://127.0.0.1:${address.port}`);
+    const response = await fetch(`${server.url}/never-ending`);
+    const reader = response.body!.getReader();
+    await reader.read();
+    void reader.closed.catch(() => undefined);
+
+    const result = await Promise.race([
+      Promise.all([server.close(), disconnected]).then(() => "closed"),
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 250),
+      ),
+    ]);
+
+    expect(result).toBe("closed");
+  });
+
 });

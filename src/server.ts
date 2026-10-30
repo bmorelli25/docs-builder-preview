@@ -1,7 +1,9 @@
 import {
   createServer,
   request as httpRequest,
+  type ClientRequest,
   type IncomingHttpHeaders,
+  type IncomingMessage,
   type ServerResponse,
 } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -144,9 +146,11 @@ function proxiedResponseHeaders(
 }
 
 async function proxyRequest(
-  request: import("node:http").IncomingMessage,
+  request: IncomingMessage,
   response: ServerResponse,
   target: URL,
+  activeRequests: Set<ClientRequest>,
+  activeResponses: Set<IncomingMessage>,
 ): Promise<void> {
   await new Promise<void>((resolve) => {
     const transport = target.protocol === "https:" ? httpsRequest : httpRequest;
@@ -157,12 +161,18 @@ async function proxyRequest(
         headers: forwardedHeaders(request.headers),
       },
       (upstreamResponse) => {
+        activeResponses.add(upstreamResponse);
+        const removeResponse = () => activeResponses.delete(upstreamResponse);
+        upstreamResponse.once("end", removeResponse);
+        upstreamResponse.once("error", removeResponse);
+        upstreamResponse.once("close", removeResponse);
         response.writeHead(
           upstreamResponse.statusCode ?? 502,
           proxiedResponseHeaders(upstreamResponse.headers),
         );
         upstreamResponse.pipe(response);
         upstreamResponse.once("end", resolve);
+        upstreamResponse.once("close", resolve);
         upstreamResponse.once("error", (error) => {
           if (!response.headersSent) send(response, 502, error.message);
           else response.destroy(error);
@@ -170,6 +180,10 @@ async function proxyRequest(
         });
       },
     );
+    activeRequests.add(upstream);
+    const removeRequest = () => activeRequests.delete(upstream);
+    upstream.once("error", removeRequest);
+    upstream.once("close", removeRequest);
     upstream.once("error", (error) => {
       if (!response.headersSent) send(response, 502, `Upstream error: ${error.message}`);
       else response.destroy(error);
@@ -195,6 +209,8 @@ export async function startReviewServer(
       : undefined;
 
   const eventClients = new Set<ServerResponse>();
+  const activeProxyRequests = new Set<ClientRequest>();
+  const activeProxyResponses = new Set<IncomingMessage>();
   const broadcast = (event: string, data: unknown = {}) => {
     const message = sseMessage(event, data);
     let recipients = 0;
@@ -308,7 +324,13 @@ export async function startReviewServer(
     const upstream = new URL(upstreamBase);
     upstream.pathname = target.pathname;
     upstream.search = target.search;
-    await proxyRequest(request, response, upstream);
+    await proxyRequest(
+      request,
+      response,
+      upstream,
+      activeProxyRequests,
+      activeProxyResponses,
+    );
   });
 
   const listen = (port: number) =>
@@ -369,6 +391,14 @@ export async function startReviewServer(
       if (activeClose) return activeClose;
       for (const client of eventClients) client.end();
       eventClients.clear();
+      for (const upstreamResponse of activeProxyResponses) {
+        upstreamResponse.destroy();
+      }
+      for (const upstreamRequest of activeProxyRequests) {
+        upstreamRequest.destroy();
+      }
+      activeProxyResponses.clear();
+      activeProxyRequests.clear();
       activeClose = (async () => {
         const cleanups: Array<{
           name: string;
