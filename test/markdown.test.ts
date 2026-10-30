@@ -6,6 +6,13 @@ import {
 } from "../src/markdown.js";
 
 describe("segmentMarkdown", () => {
+  it("skips frontmatter", () => {
+    const blocks = segmentMarkdown(
+      ["---", "applies_to:", "  stack: all", "---", "", "# Title"].join("\n"),
+    );
+    expect(blocks.map((block) => block.startLine)).toEqual([6]);
+  });
+
   it("segments each table row as its own block", () => {
     const source = [
       "Intro text.",
@@ -310,18 +317,27 @@ describe("normalizeVisibleText", () => {
     ).toBe("AI Assistant ✅ Refer to \uFFFC .");
   });
 
-  it("expands exact known docset substitutions and preserves unknown tokens", () => {
+  it("expands known docset substitutions and leaves a gap for built-in ones", () => {
     expect(
       normalizeVisibleText(
-        "{{agent-builder}} works with {{elastic-sec}} and {{unknown}}.",
+        "{{agent-builder}} works with {{elastic-sec}} and {{product.observability}}.",
         {
           "agent-builder": "Elastic Agent Builder",
           "elastic-sec": "Elastic Security",
         },
       ),
     ).toBe(
-      "Elastic Agent Builder works with Elastic Security and {{unknown}}.",
+      "Elastic Agent Builder works with Elastic Security and \uFFFC .",
     );
+  });
+
+  it("drops explicit heading anchors", () => {
+    expect(
+      normalizeVisibleText(
+        "## {{kib}} product documentation for AI chat [air-gapped-kibana-product-documentation]",
+        { kib: "Kibana" },
+      ),
+    ).toBe("Kibana product documentation for AI chat");
   });
 
   it("strips applies_to and icon roles without stripping ordinary inline code", () => {

@@ -129,7 +129,7 @@ export const parentHighlighterScript = `(() => {
     (frameDocument.head || frameDocument.documentElement).append(stylesheet);
     const elements = [...frameDocument.querySelectorAll(
       "main p, main h1, main h2, main h3, main h4, main h5, main h6, main li, main pre, main blockquote, main td, main th, main tr, article p, article h1, article h2, article h3, article h4, article h5, article h6, article li, article pre, article blockquote, article td, article th, article tr"
-    )];
+    )].filter((element) => !element.closest("nav, aside.sidebar"));
     const available = new Set(elements);
     const matched = [];
     const unmatched = [];
@@ -215,6 +215,38 @@ export const parentHighlighterScript = `(() => {
         fallback.textContent = note.textContent;
         deletedFallback.append(fallback);
       }
+    }
+    if (file.frontmatter) {
+      const range = (start, end) => start === end ? "Line " + start : "Lines " + start + "-" + end;
+      const box = frameDocument.createElement("aside");
+      box.className = "frontmatter-change";
+      box.dataset.docsReviewMark = file.frontmatter.kind;
+      const title = frameDocument.createElement("div");
+      title.className = "frontmatter-change-title";
+      title.textContent = "Frontmatter changed";
+      box.append(title);
+      for (const block of file.frontmatter.blocks) {
+        const lines = frameDocument.createElement("pre");
+        lines.textContent = range(block.startLine, block.endLine) + ":\\n" + block.source;
+        box.append(lines);
+      }
+      for (const hunk of file.frontmatter.deletedHunks) {
+        const lines = frameDocument.createElement("pre");
+        lines.className = "deleted-inline";
+        lines.textContent = "Deleted " + range(hunk.oldStartLine, hunk.oldEndLine).toLowerCase() + ":\\n" + hunk.source;
+        box.append(lines);
+      }
+      const container = frameDocument.querySelector("main") || frameDocument.querySelector("article") || frameDocument.body;
+      const heading = [...(container?.querySelectorAll("h1") || [])]
+        .find((element) => !element.closest("nav, aside.sidebar"));
+      if (heading) heading.insertAdjacentElement("beforebegin", box);
+      else container?.prepend(box);
+      const first = file.frontmatter.blocks[0];
+      const startLine = first?.startLine || file.frontmatter.deletedHunks[0]?.newAnchorLine || 1;
+      matched.unshift({
+        element: box,
+        block: { kind: file.frontmatter.kind, startLine, endLine: first?.endLine || startLine },
+      });
     }
     applyDeletedVisibility();
     toolbar.hidden = false;

@@ -8,10 +8,11 @@ import type {
   ChangedFile,
   DeletedHunk,
   FileStatus,
+  FrontmatterChange,
   ReviewModel,
 } from "./model.js";
 import { loadDocsetSubstitutions } from "./docset.js";
-import { segmentMarkdown } from "./markdown.js";
+import { frontmatterEndLine, segmentMarkdown } from "./markdown.js";
 import { sourcePathToRoute } from "./routes.js";
 
 const execFileAsync = promisify(execFile);
@@ -361,6 +362,61 @@ function overlaps(
   return left.startLine <= right.endLine && right.startLine <= left.endLine;
 }
 
+function splitFrontmatterChanges(
+  source: string,
+  diff: Omit<ParsedDiff, "addedLines" | "deletedLines">,
+  fileIsAdded: boolean,
+): Omit<ParsedDiff, "addedLines" | "deletedLines"> & {
+  frontmatter?: FrontmatterChange;
+} {
+  const end = frontmatterEndLine(source);
+  if (end === 0) return diff;
+
+  const lines = source.split(/\r?\n/);
+  const frontmatterBlocks: ChangedBlock[] = [];
+  const bodyBlocks: ChangedBlock[] = [];
+  for (const range of diff.blocks) {
+    const startLine = Math.max(range.startLine, 2);
+    const endLine = Math.min(range.endLine, end - 1);
+    if (startLine <= endLine) {
+      frontmatterBlocks.push({
+        kind: range.kind,
+        startLine,
+        endLine,
+        source: lines.slice(startLine - 1, endLine).join("\n"),
+      });
+    }
+    if (range.endLine > end) {
+      bodyBlocks.push({ ...range, startLine: Math.max(range.startLine, end + 1) });
+    }
+  }
+  const frontmatterDeleted = diff.deletedHunks.filter(
+    (hunk) => hunk.newAnchorLine < end,
+  );
+  const result = {
+    blocks: bodyBlocks,
+    deletedHunks: diff.deletedHunks.filter((hunk) => hunk.newAnchorLine >= end),
+    deletionAnchors: diff.deletionAnchors.filter((anchor) => anchor >= end),
+  };
+  if (frontmatterBlocks.length === 0 && frontmatterDeleted.length === 0) {
+    return result;
+  }
+  const kind =
+    fileIsAdded ||
+    (frontmatterDeleted.length === 0 &&
+      frontmatterBlocks.every((block) => block.kind === "added"))
+      ? "added"
+      : "modified";
+  return {
+    ...result,
+    frontmatter: {
+      kind,
+      blocks: frontmatterBlocks,
+      deletedHunks: frontmatterDeleted,
+    },
+  };
+}
+
 function semanticChangedBlocks(
   source: string,
   changedRanges: ChangedBlock[],
@@ -553,18 +609,30 @@ export async function buildReview(
             ]),
           );
       const { deletionAnchors, ...publicDiff } = parsedDiff;
-      const diff =
-        isMarkdown && currentSource !== undefined
-          ? {
-              ...publicDiff,
-              blocks: semanticChangedBlocks(
-                currentSource,
-                publicDiff.blocks,
-                deletionAnchors,
-                file.status === "added",
-              ),
-            }
-          : { ...publicDiff, blocks: [] };
+      let diff: Omit<ParsedDiff, "deletionAnchors"> & {
+        frontmatter?: FrontmatterChange;
+      };
+      if (isMarkdown && currentSource !== undefined) {
+        const split = splitFrontmatterChanges(
+          currentSource,
+          parsedDiff,
+          file.status === "added",
+        );
+        diff = {
+          addedLines: parsedDiff.addedLines,
+          deletedLines: parsedDiff.deletedLines,
+          deletedHunks: split.deletedHunks,
+          blocks: semanticChangedBlocks(
+            currentSource,
+            split.blocks,
+            split.deletionAnchors,
+            file.status === "added",
+          ),
+          ...(split.frontmatter && { frontmatter: split.frontmatter }),
+        };
+      } else {
+        diff = { ...publicDiff, blocks: [] };
+      }
 
       return {
         ...file,

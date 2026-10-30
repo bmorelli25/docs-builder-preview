@@ -25,4 +25,33 @@ tr[data-docs-review-mark] > th {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.frontmatter-change {
+  display: block;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  color: #172033;
+}
+.frontmatter-change-title {
+  margin-bottom: 4px;
+  font: 600 12px/1.4 system-ui, sans-serif;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.frontmatter-change pre {
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.frontmatter-change pre.deleted-inline {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #fca5a5;
+  border-left: 4px solid #dc2626;
+  background: #fef2f2;
+}
 `.trim();

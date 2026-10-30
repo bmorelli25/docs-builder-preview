@@ -208,8 +208,13 @@ export function normalizeVisibleText(
 ): string {
   const expandedSource = source
     .replace(/\{\{([^{}\r\n]+)\}\}/g, (token, key: string) =>
-      Object.hasOwn(substitutions, key) ? substitutions[key] : token,
+      Object.hasOwn(substitutions, key)
+        ? substitutions[key]
+        : /^[\w.-]+$/.test(key.trim())
+          ? ` ${generatedTextGap} `
+          : token,
     )
+    .replace(/^(\s*#{1,6}\s.*?)\s*\[[\w.-]+\]\s*$/gm, "$1")
     .replace(/\{(?:applies_to|icon)\}\s*`[^`\r\n]*`/g, "")
     .replace(/(?<!!)\[\]\([^()\s]*\)/g, ` ${generatedTextGap} `);
   const sourceLines = expandedSource.split(/\r?\n/);
@@ -334,12 +339,17 @@ function findSetextUnderline(
   return undefined;
 }
 
+/** One-based line number of the closing frontmatter fence, or 0 when absent. */
+export function frontmatterEndLine(source: string): number {
+  const lines = source.split(/\r?\n/);
+  if (!/^---\s*$/.test(lines[0] ?? "")) return 0;
+  return lines.findIndex((line, index) => index > 0 && /^---\s*$/.test(line)) + 1;
+}
+
 export function segmentMarkdown(source: string): SourceBlock[] {
   const lines = source.split(/\r?\n/);
   const blocks: SourceBlock[] = [];
-  const frontmatterEnd = /^---\s*$/.test(lines[0] ?? "")
-    ? lines.findIndex((line, index) => index > 0 && /^---\s*$/.test(line))
-    : -1;
+  const frontmatterEnd = frontmatterEndLine(source) - 1;
 
   for (let index = frontmatterEnd + 1; index < lines.length; ) {
     if (!lines[index].trim()) {

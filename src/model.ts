@@ -22,6 +22,12 @@ export interface DeletedHunk {
   source: string;
 }
 
+export interface FrontmatterChange {
+  kind: "added" | "modified";
+  blocks: ChangedBlock[];
+  deletedHunks: DeletedHunk[];
+}
+
 export interface ChangedFile {
   path: string;
   previousPath?: string;
@@ -32,6 +38,7 @@ export interface ChangedFile {
   deletedLines: number;
   blocks: ChangedBlock[];
   deletedHunks: DeletedHunk[];
+  frontmatter?: FrontmatterChange;
 }
 
 export interface ReviewModel {

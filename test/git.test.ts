@@ -311,6 +311,53 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("reports frontmatter changes separately from body blocks", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "---\nnavigation_title: Old\nproducts:\n  - id: kibana\nmapped_pages: x\n---\n\n# Title\n\nBody.\n",
+    );
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "---\nnavigation_title: New\napplies_to:\n  stack: ga 9.1+\nproducts:\n  - id: kibana\n---\n\n# Title\n\nBody.\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+    const [file] = review.files;
+
+    expect(file.blocks).toEqual([]);
+    expect(file.deletedHunks).toEqual([]);
+    expect(file.frontmatter).toEqual({
+      kind: "modified",
+      blocks: [
+        {
+          kind: "modified",
+          startLine: 2,
+          endLine: 4,
+          source: "navigation_title: New\napplies_to:\n  stack: ga 9.1+",
+        },
+      ],
+      deletedHunks: [
+        {
+          oldStartLine: 2,
+          oldEndLine: 2,
+          newAnchorLine: 2,
+          source: "navigation_title: Old",
+        },
+        {
+          oldStartLine: 5,
+          oldEndLine: 5,
+          newAnchorLine: 6,
+          source: "mapped_pages: x",
+        },
+      ],
+    });
+  });
+
   it("marks a surviving paragraph modified when a line is deleted", async () => {
     const repositoryPath = await createRepository();
     await write(
