@@ -80,6 +80,18 @@ export const parentHighlighterScript = `(() => {
     indicator.textContent = matched + " matched · " + unmatched + " unmatched";
     indicator.dataset.mapping = unmatched === 0 ? "matched" : matched ? "partial" : "unmatched";
   };
+  const revealCurrentNavItem = (frameDocument) => {
+    const nav = frameDocument?.getElementById("pages-nav");
+    const current = [...(nav?.querySelectorAll(".current") || [])]
+      .find((element) => element.getClientRects().length > 0);
+    if (!nav || !current) return;
+    const navBox = nav.getBoundingClientRect();
+    const box = current.getBoundingClientRect();
+    const stickyHeight = nav.querySelector(".sticky")?.getBoundingClientRect().height || 0;
+    if (box.top >= navBox.top + stickyHeight && box.bottom <= navBox.bottom) return;
+    const centered = stickyHeight + (navBox.height - stickyHeight) / 2 - box.height / 2;
+    nav.scrollTop = Math.max(0, nav.scrollTop + box.top - navBox.top - centered);
+  };
   const resetParentUi = () => {
     toolbar.hidden = true;
     status.textContent = "0 matched · 0 unmatched";
@@ -95,6 +107,7 @@ export const parentHighlighterScript = `(() => {
     const link = document.querySelector('.review-link[aria-current="page"]');
     const file = files.get(link?.dataset.sourceFile || "");
     const frameDocument = preview.contentDocument;
+    revealCurrentNavItem(frameDocument);
     if (!file || !frameDocument) {
       mappingStatus(link, 0, file?.blocks?.length || 0);
       return;

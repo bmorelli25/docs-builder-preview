@@ -581,15 +581,36 @@ export function createDashboard(
       }
       filterEmpty.hidden = visible !== 0 || items.length === 0;
     };
-    const activateLink = (link, navigate) => {
+    const selectLink = (link) => {
       for (const candidate of previewLinks) {
         candidate.classList.remove("selected");
         candidate.removeAttribute("aria-current");
       }
+      link?.classList.add("selected");
+      link?.setAttribute("aria-current", "page");
+    };
+    const previewTarget = (href) => {
+      try {
+        const url = new URL(href, window.location.origin);
+        if (url.origin !== window.location.origin) return null;
+        if (url.pathname === "/" && !url.search) return null;
+        return url.pathname.replace(/(.)\\/$/, "$1") + url.search;
+      } catch {
+        return null;
+      }
+    };
+    const framePreviewHref = () => {
+      try {
+        const href = preview.contentWindow?.location.href ?? "";
+        return href.startsWith(window.location.origin + "/") ? previewTarget(href) : null;
+      } catch {
+        return null;
+      }
+    };
+    const activateLink = (link, navigate) => {
+      selectLink(link);
       if (link) {
         activeHref = link.getAttribute("href");
-        link.classList.add("selected");
-        link.setAttribute("aria-current", "page");
         previewEmpty.hidden = true;
         if (navigate) preview.setAttribute("src", activeHref);
       } else {
@@ -628,6 +649,16 @@ export function createDashboard(
         persistState();
       });
     }
+    preview.addEventListener("load", () => {
+      const shown = framePreviewHref();
+      if (!shown || shown === previewTarget(activeHref ?? "")) return;
+      const link = previewLinks.find(
+        (candidate) => previewTarget(candidate.getAttribute("href")) === shown,
+      );
+      selectLink(link);
+      activeHref = link ? link.getAttribute("href") : shown;
+      persistState();
+    });
     let state;
     try {
       state = JSON.parse(sessionStorage.getItem("docs-review-state") ?? "null");
@@ -649,9 +680,16 @@ export function createDashboard(
             (link) => link.getAttribute("href") === state.activeHref,
           )
         : undefined;
+      const restoredHref = typeof state.activeHref === "string"
+        ? previewTarget(state.activeHref)
+        : null;
       if (activeLink) {
         activateLink(activeLink, false);
         preview.setAttribute("src", state.activeHref);
+      } else if (restoredHref) {
+        activeHref = restoredHref;
+        previewEmpty.hidden = true;
+        preview.setAttribute("src", restoredHref);
       } else {
         activateLink(null, false);
       }

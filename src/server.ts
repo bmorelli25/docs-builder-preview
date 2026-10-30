@@ -9,6 +9,7 @@ import {
 import { request as httpsRequest } from "node:https";
 
 import type { ChangedFile, ReviewModel } from "./model.js";
+import { openingTagEnd, rewritePreviewHtml } from "./preview-html.js";
 import { createReviewChecks } from "./review-checks.js";
 import { sourcePathToRoute } from "./routes.js";
 import { createDashboard } from "./ui/dashboard.js";
@@ -176,21 +177,6 @@ function proxiedResponseHeaders(
 
 const MAX_BUFFERED_HTML_BYTES = 20 * 1024 * 1024;
 
-function openingTagEnd(source: string, start: number): number | undefined {
-  let quote: "'" | '"' | undefined;
-  for (let index = start; index < source.length; index++) {
-    const character = source[index];
-    if (quote) {
-      if (character === quote) quote = undefined;
-    } else if (character === "'" || character === '"') {
-      quote = character;
-    } else if (character === ">") {
-      return index;
-    }
-  }
-  return undefined;
-}
-
 function scriptType(openingTag: string): string | undefined {
   const match = openingTag.match(
     /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i,
@@ -323,7 +309,10 @@ async function proxyRequest(
         upstreamResponse.once("end", () => {
           if (finished) return;
           const sanitized = Buffer.from(
-            stripExecutableScripts(Buffer.concat(chunks).toString("utf8")),
+            rewritePreviewHtml(
+              stripExecutableScripts(Buffer.concat(chunks).toString("utf8")),
+              target.pathname,
+            ),
             "utf8",
           );
           const headers = proxiedResponseHeaders(upstreamResponse.headers);

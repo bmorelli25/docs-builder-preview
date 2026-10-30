@@ -311,3 +311,143 @@ test("reviews changed pages safely in the integrated dashboard", async ({
     await cleanup(reviewServer, upstream);
   }
 });
+
+test("follows docs navigation inside the preview", async ({ page }) => {
+  const filler = Array.from(
+    { length: 40 },
+    (_, index) => `<li><a href="/filler/${index}" class="nav-link">Filler ${index}</a></li>`,
+  ).join("");
+  const nav = `<nav id="pages-nav">
+    <div class="sticky"><a class="pages-dropdown_active" href="/">Docs</a></div>
+    <ul>${filler}
+      <li class="nav-folder">
+        <div class="peer"><a href="/guide" class="nav-folder-link">Guide</a>
+          <label for="F-guide"><input id="F-guide" type="checkbox" class="hidden"></label></div>
+        <ul class="nav-subtree">
+          <li><a href="/guide/second" class="nav-link">Second page</a></li>
+          <li><a href="/guide/third" class="nav-link">Third page</a></li>
+          <li><a href="/guide/plain" class="nav-link">Plain page</a></li>
+        </ul>
+      </li>
+    </ul>
+  </nav>`;
+  const body: Record<string, string> = {
+    "/": "<main><h1>Docs home</h1></main>",
+    "/?preview=1": "<main><h1>Docs home</h1></main>",
+    "/guide/second": "<main><h1>Second page</h1><p>Second changed sentence</p></main>",
+    "/guide/third": "<main><h1>Third page</h1><p>Third changed sentence</p></main>",
+    "/guide/plain": "<main><h1>Plain page</h1><p>Second changed sentence</p></main>",
+  };
+  const upstream = createServer((request, response) => {
+    if (request.url === "/_static/site.css") {
+      response.setHeader("content-type", "text/css");
+      response.end(`
+        #pages-nav { height: 240px; overflow-y: auto; }
+        .nav-subtree, .hidden { display: none; }
+        .peer:has(:checked) ~ .nav-subtree { display: block; }
+        #pages-nav .current { color: rgb(11, 100, 217); }
+      `);
+      return;
+    }
+    const content = body[request.url ?? ""];
+    if (!content) {
+      response.statusCode = 404;
+      response.end("missing");
+      return;
+    }
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end(`<!doctype html><html><head>
+      <link rel="stylesheet" href="/_static/site.css"></head>
+      <body hx-boost="true">${nav}${content}
+      <script>window.__docsNavScriptExecuted = true</script></body></html>`);
+  });
+  const upstreamUrl = await listen(upstream);
+  const changed = (name: string, text: string): ReviewModel["files"][number] => ({
+    path: `docs/guide/${name}.md`,
+    status: "modified",
+    route: `/guide/${name}`,
+    addedLines: 1,
+    deletedLines: 0,
+    blocks: [{ kind: "added", startLine: 3, endLine: 3, source: text }],
+    deletedHunks: [],
+  });
+  const review: ReviewModel = {
+    repositoryPath: "/tmp/repo",
+    baseRef: "main",
+    mergeBase: "abc",
+    warnings: [],
+    files: [
+      changed("second", "Second changed sentence"),
+      changed("third", "Third changed sentence"),
+    ],
+  };
+  let reviewServer:
+    | Awaited<ReturnType<typeof startReviewServer>>
+    | undefined;
+  try {
+    reviewServer = await startReviewServer({ review, port: 0, upstreamUrl });
+    await page.goto(reviewServer.url);
+    const preview = page.frameLocator('iframe[name="docs-preview"]');
+    const previewUrl = () =>
+      page.locator('iframe[name="docs-preview"]').evaluate((frame) => {
+        const location = (frame as HTMLIFrameElement).contentWindow!.location;
+        return location.pathname + location.search;
+      });
+    const selected = page.locator('.review-link[aria-current="page"]');
+
+    await page.locator('.review-link[href="/guide/second"]').click();
+    const second = preview.locator('#pages-nav a[href="/guide/second"]');
+    await expect(second).toBeVisible();
+    await expect(second).toHaveClass(/\bcurrent\b/);
+    await expect(second).toHaveCSS("color", "rgb(11, 100, 217)");
+    await expect(preview.locator("#F-guide")).toBeChecked();
+    await expect(second).toBeInViewport();
+    expect(
+      await preview.locator("#pages-nav").evaluate((nav) => nav.scrollTop),
+    ).toBeGreaterThan(0);
+    await expect(
+      preview.locator('[data-docs-review-mark="added"]'),
+    ).toHaveText("Second changed sentence");
+
+    await preview.locator('#pages-nav a[href="/guide/third"]').click();
+    await expect(preview.getByRole("heading", { name: "Third page" })).toBeVisible();
+    expect(await previewUrl()).toBe("/guide/third");
+    await expect(selected).toHaveAttribute("href", "/guide/third");
+    await expect(
+      preview.locator('#pages-nav a[href="/guide/third"]'),
+    ).toHaveClass(/\bcurrent\b/);
+    await expect(
+      preview.locator('[data-docs-review-mark="added"]'),
+    ).toHaveText("Third changed sentence");
+    await expect(page.locator("#mapping-counts")).toHaveText(
+      "1 matched · 0 unmatched",
+    );
+    await expect(
+      page.locator('.review-link[href="/guide/third"] .mapping-status'),
+    ).toHaveText("1 matched · 0 unmatched");
+
+    await preview.locator('#pages-nav a[href="/guide/plain"]').click();
+    await expect(preview.getByRole("heading", { name: "Plain page" })).toBeVisible();
+    await expect(selected).toHaveCount(0);
+    await expect(page.locator("#preview-toolbar")).toBeHidden();
+    await expect(preview.locator("[data-docs-review-mark]")).toHaveCount(0);
+    await expect(
+      preview.locator('#pages-nav a[href="/guide/plain"]'),
+    ).toHaveClass(/\bcurrent\b/);
+
+    await preview.locator("#pages-nav a.pages-dropdown_active").click();
+    await expect(preview.getByRole("heading", { name: "Docs home" })).toBeVisible();
+    expect(await previewUrl()).toBe("/?preview=1");
+
+    await page.reload();
+    await expect(preview.getByRole("heading", { name: "Docs home" })).toBeVisible();
+    await expect(page.locator(".preview-empty")).toBeHidden();
+    expect(
+      await page
+        .frame({ name: "docs-preview" })!
+        .evaluate(() => window.__docsNavScriptExecuted),
+    ).toBeUndefined();
+  } finally {
+    await cleanup(reviewServer, upstream);
+  }
+});

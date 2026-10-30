@@ -267,6 +267,48 @@ describe("startReviewServer", () => {
     expect(html).not.toContain("new EventSource");
   });
 
+  it("renders docs-builder navigation state into proxied pages", async () => {
+    const nav = [
+      '<nav id="pages-nav"><a class="pages-dropdown_active" href="/">Docs</a><ul>',
+      '<li class="nav-folder"><div class="peer"><a href="/guide">Guide</a>',
+      '<label for="F1"><input id="F1" type="checkbox"></label></div>',
+      '<ul class="nav-subtree"><li><a href="/guide/install" class="nav-link">Install</a></li></ul>',
+      "</li></ul></nav>",
+    ].join("");
+    const upstream = createServer((request, response) => {
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.end(
+        request.url?.startsWith("/guide/install")
+          ? `<html><body>${nav}<script src="/_static/main.js"></script></body></html>`
+          : "<html><body>other</body></html>",
+      );
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    running.push({
+      close: () =>
+        new Promise<void>((resolve, reject) =>
+          upstream.close((error) => (error ? reject(error) : resolve())),
+        ),
+    });
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("no address");
+    const server = await start(`http://127.0.0.1:${address.port}`);
+
+    const response = await fetch(`${server.url}/guide/install?tab=1`);
+    const html = await response.text();
+    expect(html).toContain('<input id="F1" type="checkbox" checked>');
+    expect(html).toContain(
+      '<a href="/guide/install" class="nav-link current">Install</a>',
+    );
+    expect(html).toContain('href="/?preview=1">Docs</a>');
+    expect(html).not.toContain("main.js");
+    expect(Number(response.headers.get("content-length"))).toBe(
+      Buffer.byteLength(html),
+    );
+  });
+
   it("passes non-HTML responses through unchanged", async () => {
     const upstream = await fakeUpstream();
     const server = await start(upstream.url);
