@@ -215,7 +215,8 @@ export function normalizeVisibleText(
           : token,
     )
     .replace(/^(\s*#{1,6}\s.*?)\s*\[[\w.-]+\]\s*$/gm, "$1")
-    .replace(/\{(?:applies_to|icon)\}\s*`[^`\r\n]*`/g, "")
+    .replace(/\{applies_to\}\s*`[^`\r\n]*`/g, ` ${generatedTextGap} `)
+    .replace(/\{icon\}\s*`[^`\r\n]*`/g, "")
     .replace(/(?<!!)\[\]\([^()\s]*\)/g, ` ${generatedTextGap} `);
   const sourceLines = expandedSource.split(/\r?\n/);
   const openingFence = sourceLines[0]?.match(/^\s*(`{3,}|~{3,})(.*)$/);

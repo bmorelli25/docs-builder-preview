@@ -12,7 +12,11 @@ import type {
   ReviewModel,
 } from "./model.js";
 import { loadDocsetSubstitutions } from "./docset.js";
-import { frontmatterEndLine, segmentMarkdown } from "./markdown.js";
+import {
+  frontmatterEndLine,
+  segmentMarkdown,
+  type SourceBlock,
+} from "./markdown.js";
 import { sourcePathToRoute } from "./routes.js";
 
 const execFileAsync = promisify(execFile);
@@ -466,6 +470,32 @@ function splitFrontmatterChanges(
   };
 }
 
+const directiveOpener = /^\s*(?::{3,}|`{3,}|~{3,})\{([\w-]+)\}/;
+const directiveCloser = /^\s*:{3,}\s*$/;
+const tableDelimiter = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+function isAppliesTo(block: SourceBlock): boolean {
+  return (
+    block.kind === "directive" &&
+    /^\s*(?:`{3,}|~{3,}|:{3,})\{applies_to\}/.test(block.source)
+  );
+}
+
+function appliesToPosition(
+  blocks: SourceBlock[],
+  blockIndex: number,
+): { headingSource?: string; index: number } {
+  let index = 0;
+  for (let cursor = blockIndex - 1; cursor >= 0; cursor--) {
+    const previous = blocks[cursor];
+    if (previous.kind === "heading") {
+      return { headingSource: previous.source, index };
+    }
+    if (isAppliesTo(previous)) index++;
+  }
+  return { index };
+}
+
 function semanticChangedBlocks(
   source: string,
   changedRanges: ChangedBlock[],
@@ -530,6 +560,9 @@ function semanticChangedBlocks(
           occurrence: twins.indexOf(block),
           occurrences: twins.length,
         }),
+        ...(isAppliesTo(block) && {
+          appliesTo: appliesToPosition(semanticBlocks, index),
+        }),
       },
     ];
   });
@@ -546,14 +579,65 @@ function semanticChangedBlocks(
       while (endLine >= startLine && !sourceLines[endLine - 1]?.trim()) {
         endLine--;
       }
-      if (startLine <= endLine) {
-        blocks.push({
-          kind: range.kind,
-          startLine,
-          endLine,
-          source: sourceLines.slice(startLine - 1, endLine).join("\n"),
-        });
+      let runStart: number | undefined;
+      let includeOpen = false;
+      const flushRun = (runEnd: number) => {
+        while (runStart !== undefined && runEnd >= runStart && !sourceLines[runEnd - 1]?.trim()) {
+          runEnd--;
+        }
+        if (runStart !== undefined && runStart <= runEnd) {
+          blocks.push({
+            kind: range.kind,
+            startLine: runStart,
+            endLine: runEnd,
+            source: sourceLines.slice(runStart - 1, runEnd).join("\n"),
+          });
+        }
+        runStart = undefined;
+      };
+      for (let line = startLine; line <= endLine; line++) {
+        const text = sourceLines[line - 1] ?? "";
+        const opener = text.match(directiveOpener);
+        const isInclude = /^(?:include|literalinclude)$/i.test(opener?.[1] ?? "");
+        const isCloser = directiveCloser.test(text);
+        const alt = text.match(/^\s*:alt:\s*(.+)$/)?.[1];
+        const lineBlock = (extra: Partial<ChangedBlock>) => {
+          flushRun(line - 1);
+          blocks.push({
+            kind: range.kind,
+            startLine: line,
+            endLine: line,
+            source: text,
+            ...extra,
+          });
+        };
+        if (tableDelimiter.test(text)) {
+          flushRun(line - 1);
+        } else if (alt !== undefined) {
+          lineBlock({ imageAlt: alt });
+        } else if (opener && !isInclude) {
+          const neighbor = semanticBlocks.find((block) => block.startLine > line);
+          const title = text.slice(opener[0].length).trim();
+          lineBlock(neighbor || title
+            ? {
+              container: {
+                neighborSource: neighbor?.source ?? "",
+                ...(title && { title }),
+              },
+            }
+            : {});
+        } else if (isCloser && !includeOpen) {
+          const neighbor = [...semanticBlocks]
+            .reverse()
+            .find((block) => block.endLine < line);
+          lineBlock(neighbor ? { container: { neighborSource: neighbor.source } } : {});
+        } else {
+          runStart ??= line;
+          if (isInclude) includeOpen = true;
+          else if (isCloser) includeOpen = false;
+        }
       }
+      flushRun(endLine);
       fallbackStart = undefined;
     };
 

@@ -261,6 +261,52 @@ export function rewriteDashboardRootLinks(html: string): string {
   return applyEdits(html, edits);
 }
 
+function escapeText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+/**
+ * docs-builder's `applies_to` badges are `<applies-to-popover>` custom
+ * elements that its scripts fill in. With scripts stripped they render empty,
+ * so the proxy writes the badge label from the element's attributes.
+ */
+export function renderAppliesBadges(html: string): string {
+  const edits: Edit[] = [];
+  let needsStyles = false;
+  let headEnd: number | undefined;
+  for (const tag of tags(html)) {
+    if (tag.closing && tag.name === "head") headEnd = tag.start;
+    if (tag.closing || tag.name !== "applies-to-popover") continue;
+    const value = (name: string) => attribute(html, tag, name)?.value ?? "";
+    const label = [
+      value("badge-key"),
+      value("show-lifecycle-name") === "true" ? value("lifecycle-name") : "",
+      value("show-version") === "true" ? value("badge-version") : "",
+    ].filter(Boolean).join(" ");
+    if (!label) continue;
+    needsStyles = true;
+    const lifecycle = value("lifecycle-class").replace(/[^\w-]/g, "");
+    edits.push({
+      start: tag.end,
+      end: tag.end,
+      text: `<span class="review-applies-badge" data-lifecycle="${lifecycle}">${escapeText(label)}</span>`,
+    });
+  }
+  if (needsStyles && headEnd !== undefined) {
+    edits.push({
+      start: headEnd,
+      end: headEnd,
+      text: '<link rel="stylesheet" href="/_review/highlight.css" data-docs-review-styles>',
+    });
+  }
+  return applyEdits(html, edits);
+}
+
 export function rewritePreviewHtml(html: string, pathname: string): string {
-  return rewriteDashboardRootLinks(markCurrentNavigation(html, pathname));
+  return renderAppliesBadges(
+    rewriteDashboardRootLinks(markCurrentNavigation(html, pathname)),
+  );
 }

@@ -339,6 +339,88 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("locates changed applies_to directives by their preceding heading", async () => {
+    const repositoryPath = await createRepository();
+    const page = (version: string) =>
+      [
+        "# Page",
+        "",
+        "## Section",
+        "",
+        "```{applies_to}",
+        "stack: ga",
+        "```",
+        "",
+        "```{applies_to}",
+        `stack: ${version}`,
+        "```",
+        "",
+      ].join("\n");
+    await write(repositoryPath, "docs/page.md", page("ga 9.0"));
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/page.md", page("ga 9.4+"));
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks[0].appliesTo).toEqual({
+      headingSource: "## Section",
+      index: 1,
+    });
+  });
+
+  it("anchors directive fences and image alt text to rendered content", async () => {
+    const repositoryPath = await createRepository();
+    const page = (admonition: string, alt: string, align: string) =>
+      [
+        "# Page",
+        "",
+        `:::{${admonition}}`,
+        "Warning body.",
+        ":::",
+        "",
+        "::::{step} First step",
+        "Step body.",
+        "::::",
+        "",
+        "```{image} /img.png",
+        `:alt: ${alt}`,
+        "```",
+        "",
+        "| A | B |",
+        align,
+        "| 1 | 2 |",
+        "",
+      ].join("\n");
+    await write(repositoryPath, "docs/page.md", page("note", "Old", "| --- | --- |"));
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(repositoryPath, "docs/page.md", page("warning", "New alt", "| :--- | :--- |"));
+
+    const review = await buildReview(repositoryPath, "main", false);
+    const blocks = review.files.find((file) => file.path === "docs/page.md")!.blocks;
+
+    expect(blocks.map(({ startLine, source, container, imageAlt }) => ({
+      startLine,
+      source,
+      container,
+      imageAlt,
+    }))).toEqual([
+      {
+        startLine: 3,
+        source: ":::{warning}",
+        container: { neighborSource: "Warning body." },
+        imageAlt: undefined,
+      },
+      {
+        startLine: 12,
+        source: ":alt: New alt",
+        container: undefined,
+        imageAlt: "New alt",
+      },
+    ]);
+  });
+
   it("reports frontmatter changes separately from body blocks", async () => {
     const repositoryPath = await createRepository();
     await write(

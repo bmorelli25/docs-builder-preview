@@ -2,9 +2,39 @@ import { describe, expect, it } from "vitest";
 
 import {
   markCurrentNavigation,
+  renderAppliesBadges,
   rewriteDashboardRootLinks,
   rewritePreviewHtml,
 } from "../src/preview-html.js";
+
+describe("renderAppliesBadges", () => {
+  it("writes visible labels into applies_to popovers", () => {
+    const html = [
+      "<html><head></head><body>",
+      '<p class="applies applies-block">',
+      '<applies-to-popover badge-key="Stack" badge-version="9.4&#x2B;" lifecycle-class="ga" lifecycle-name="GA" show-lifecycle-name="true" show-version="true"></applies-to-popover>',
+      '<applies-to-popover badge-key="Serverless <Security>" lifecycle-class="preview" lifecycle-name="Preview" show-lifecycle-name="false" show-version="false"></applies-to-popover>',
+      "</p></body></html>",
+    ].join("");
+
+    const result = renderAppliesBadges(html);
+
+    expect(result).toContain(
+      '<span class="review-applies-badge" data-lifecycle="ga">Stack GA 9.4+</span>',
+    );
+    expect(result).toContain(
+      '<span class="review-applies-badge" data-lifecycle="preview">Serverless &lt;Security&gt;</span>',
+    );
+    expect(result).toContain(
+      '<link rel="stylesheet" href="/_review/highlight.css" data-docs-review-styles></head>',
+    );
+  });
+
+  it("leaves pages without badges unchanged", () => {
+    const html = "<html><head></head><body><p>Text</p></body></html>";
+    expect(renderAppliesBadges(html)).toBe(html);
+  });
+});
 
 const folder = (id: string, href: string, label: string, children: string) => `
   <li class="nav-folder mt-4">

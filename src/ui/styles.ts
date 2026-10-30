@@ -62,4 +62,28 @@ tr[data-docs-review-mark] > th {
   border-left: 4px solid #dc2626;
   background: #fef2f2;
 }
+.applies-block .review-applies-badge,
+.applies-inline .review-applies-badge {
+  display: inline-block;
+  margin: 0 6px 4px 0;
+  padding: 1px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #334155;
+  background: #f8fafc;
+  font: 600 12px/1.6 system-ui, sans-serif;
+  white-space: nowrap;
+}
+.review-applies-badge[data-lifecycle="preview"],
+.review-applies-badge[data-lifecycle="beta"] {
+  border-color: #93c5fd;
+  color: #1e3a8a;
+  background: #eff6ff;
+}
+.review-applies-badge[data-lifecycle="deprecated"],
+.review-applies-badge[data-lifecycle="removed"] {
+  border-color: #fca5a5;
+  color: #7f1d1d;
+  background: #fef2f2;
+}
 `.trim();

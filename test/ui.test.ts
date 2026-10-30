@@ -495,7 +495,7 @@ describe("generated browser assets", () => {
     };
 
     expect(JSON.parse(createHighlighterData(review)).files[0].blocks[0].text)
-      .toBe("Elastic Agent Builder in Kibana");
+      .toBe("Elastic Agent Builder in Kibana \uFFFC");
   });
 
   it("runs matching and review controls only in the trusted parent", () => {

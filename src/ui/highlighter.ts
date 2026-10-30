@@ -61,6 +61,34 @@ export function createHighlighterData(review: ReviewModel): string {
           text: normalizeVisibleText(block.source, review.substitutions) ||
             stepTitle(block.source, review.substitutions),
           ...tabTitle(block.source, review.substitutions),
+          ...(block.container && {
+            container: {
+              neighbor: normalizeVisibleText(
+                block.container.neighborSource,
+                review.substitutions,
+              ),
+              ...(block.container.title && {
+                title: normalizeVisibleText(
+                  block.container.title,
+                  review.substitutions,
+                ),
+              }),
+            },
+          }),
+          ...(block.imageAlt !== undefined && {
+            imageAlt: normalizeVisibleText(block.imageAlt, review.substitutions),
+          }),
+          ...(block.appliesTo && {
+            appliesTo: {
+              index: block.appliesTo.index,
+              heading: block.appliesTo.headingSource === undefined
+                ? undefined
+                : normalizeVisibleText(
+                  block.appliesTo.headingSource,
+                  review.substitutions,
+                ),
+            },
+          }),
         })),
     })),
   });
@@ -166,7 +194,8 @@ export const parentHighlighterScript = `(() => {
     };
     const uniqueExact = (block, text) => pick(
       block,
-      (element) => normalize(elementText(element)) === text
+      (element) => normalize(elementText(element)) === text ||
+        tokens(elementText(element)).join(" ") === tokens(text).join(" ")
     );
     const containsInOrder = (actual, segments) => {
       let from = 0;
@@ -193,6 +222,54 @@ export const parentHighlighterScript = `(() => {
       });
     };
     const tabLabels = [...frameDocument.querySelectorAll("label.tabs-label")];
+    const appliesRows = [...frameDocument.querySelectorAll(
+      "main h1, main h2, main h3, main h4, main h5, main h6, main .applies-block"
+    )].filter((element) => !element.closest("nav, aside.sidebar"));
+    const appliesMatch = (block) => {
+      let cursor = 0;
+      if (block.appliesTo.heading !== undefined) {
+        const heading = normalize(block.appliesTo.heading);
+        cursor = appliesRows.findIndex((element) =>
+          !element.classList.contains("applies-block") &&
+          tokens(element.textContent || "").join(" ") === tokens(heading).join(" ")
+        ) + 1;
+        if (cursor === 0) return null;
+      }
+      let seen = 0;
+      for (; cursor < appliesRows.length; cursor++) {
+        const row = appliesRows[cursor];
+        if (!row.classList.contains("applies-block")) return null;
+        if (seen++ === block.appliesTo.index) return available.has(row) ? row : null;
+      }
+      return null;
+    };
+    const sameWords = (left, right) => {
+      const words = tokens(right).join(" ");
+      return words.length > 0 && tokens(left).join(" ") === words;
+    };
+    const containerSelector = ".admonition, li.step, details, .dropdown, .tabs-item";
+    const containerMatch = (block) => {
+      if (block.container.title) {
+        const titled = [...frameDocument.querySelectorAll(
+          "main h1, main h2, main h3, main h4, main h5, main h6, main .admonition-title, main summary"
+        )].find((element) => !element.closest("nav, aside.sidebar") &&
+          sameWords(element.textContent || "", block.container.title));
+        const titledContainer = titled?.closest(containerSelector);
+        if (titledContainer) return titledContainer;
+      }
+      const segments = block.container.neighbor.split("\\uFFFC")
+        .map(tokens).filter((segment) => segment.length);
+      if (segments.length === 0) return null;
+      const candidates = elements.filter((element) =>
+        containsInOrder(tokens(elementText(element)), segments)
+      );
+      const inner = candidates.find((candidate) => !candidates.some(
+        (other) => other !== candidate && candidate.contains(other)
+      ));
+      return inner?.closest(containerSelector) || inner || null;
+    };
+    const imageMatch = (block) => [...frameDocument.querySelectorAll("main img[alt]")]
+      .find((image) => sameWords(image.getAttribute("alt") || "", block.imageAlt)) || null;
     for (const block of file.blocks || []) {
       if (block.tabTitle) {
         const title = normalize(block.tabTitle);
@@ -209,7 +286,13 @@ export const parentHighlighterScript = `(() => {
         continue;
       }
       const text = normalize(block.text || "");
-      const element = text && (uniqueExact(block, text) || uniqueTokenMatch(block, text));
+      const element = block.appliesTo
+        ? appliesMatch(block)
+        : block.container
+          ? containerMatch(block)
+          : block.imageAlt !== undefined
+            ? imageMatch(block)
+            : text && (uniqueExact(block, text) || uniqueTokenMatch(block, text));
       if (!element) {
         unmatched.push(block);
         continue;
