@@ -842,6 +842,57 @@ describe("watchRepository", () => {
     await watcher.close();
     expect(nativeWatcher.closeCalls).toBe(1);
   });
+
+  it("refreshes once per save, after docs-builder writes its output", async () => {
+    const nativeWatcher = new FakeRecursiveWatcher();
+    let listener:
+      | ((eventType: string, filename: string | Buffer | null) => void)
+      | undefined;
+    const watchFactory: RecursiveWatchFactory = (_path, _options, onChange) => {
+      listener = onChange;
+      return nativeWatcher;
+    };
+    let rebuilds = 0;
+    let refreshes = 0;
+    const watcher = await watchRepository(
+      "/repo",
+      async () => {
+        rebuilds++;
+      },
+      () => {},
+      watchFactory,
+      () => {},
+      { refresh: () => refreshes++, outputSettleMs: 300 },
+    );
+
+    listener!("change", "docs/page.md");
+    await delay(120);
+    expect(refreshes).toBe(1);
+
+    listener!("rename", ".artifacts/docs/html/page/index.html");
+    await delay(150);
+    expect(rebuilds).toBe(1);
+    expect(refreshes).toBe(1);
+
+    listener!("change", "docs/page.md");
+    await delay(120);
+    expect(rebuilds).toBe(2);
+    expect(refreshes).toBe(1);
+    listener!("rename", ".artifacts/docs/html/page/index.html");
+    listener!("rename", ".artifacts/docs/html/index.html");
+    await delay(150);
+    expect(refreshes).toBe(2);
+    await delay(300);
+    expect(refreshes).toBe(2);
+
+    listener!("change", "docs/page.md");
+    await delay(120);
+    expect(refreshes).toBe(2);
+    await delay(300);
+    expect(refreshes).toBe(3);
+
+    await watcher.close();
+  });
 });
 
 describe("cleanup coordination", () => {

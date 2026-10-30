@@ -326,15 +326,29 @@ export const parentHighlighterScript = `(() => {
     previous.disabled = true;
     next.disabled = true;
   };
+  const takeSavedScroll = (frameDocument) => {
+    const saved = window.pendingPreviewScroll;
+    window.pendingPreviewScroll = undefined;
+    const location = frameDocument?.defaultView?.location;
+    if (!saved || !location) return null;
+    const shown = location.pathname.replace(/(.)\\/$/, "$1") + location.search;
+    return saved.href === shown ? saved.y : null;
+  };
+  const restoreScroll = (frameDocument, y) => {
+    const scroller = frameDocument.scrollingElement || frameDocument.documentElement;
+    scroller.scrollTop = y;
+  };
   preview.addEventListener("load", () => {
     resetParentUi();
     const link = document.querySelector('.review-link[aria-current="page"]');
     const file = files.get(link?.dataset.sourceFile || "");
     const frameDocument = preview.contentDocument;
+    const savedScroll = takeSavedScroll(frameDocument);
     revealCurrentNavItem(frameDocument);
     if (!file || !frameDocument) {
       mappingStatus(link, 0, file?.blocks?.length || 0);
       applyDeletedVisibility();
+      if (frameDocument && savedScroll !== null) restoreScroll(frameDocument, savedScroll);
       return;
     }
     const stylesheet = frameDocument.createElement("link");
@@ -583,7 +597,24 @@ export const parentHighlighterScript = `(() => {
     next.disabled = matched.length === 0;
     previous.onclick = () => show(-1);
     next.onclick = () => show(1);
-    if (matched.length) {
+    if (savedScroll !== null) {
+      restoreScroll(frameDocument, savedScroll);
+      const viewportMiddle = (frameDocument.defaultView?.innerHeight || 0) / 2;
+      let nearest = -1;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      matched.forEach(({ element }, index) => {
+        const box = element.getBoundingClientRect();
+        const distance = Math.abs(box.top + box.height / 2 - viewportMiddle);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearest = index;
+        }
+      });
+      current = nearest;
+      const match = matched[nearest];
+      openSource.href = sourceHref(file, match?.block.startLine || unmatched[0]?.startLine || 1);
+      openSource.hidden = false;
+    } else if (matched.length) {
       show(1);
     } else {
       const line = unmatched[0]?.startLine || file.deletedHunks?.[0]?.newAnchorLine || 1;

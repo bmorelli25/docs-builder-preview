@@ -2,11 +2,12 @@
 
 import { spawn } from "node:child_process";
 import {
+  existsSync,
   watch as fsWatch,
   type FSWatcher,
   type WatchEventType,
 } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ensureDocsBuilder } from "./docs-builder.js";
@@ -141,12 +142,25 @@ const defaultWatchFactory: RecursiveWatchFactory = (
   listener,
 ) => fsWatch(path, options, listener);
 
+function pathSegments(filename: string | Buffer | null): string[] {
+  return filename === null ? [] : filename.toString().split(/[\\/]+/);
+}
+
 function ignoredWatchPath(filename: string | Buffer | null): boolean {
-  if (filename === null) return false;
-  return filename
-    .toString()
-    .split(/[\\/]+/)
-    .some((segment) => segment === ".git" || segment === "node_modules");
+  return pathSegments(filename).some(
+    (segment) => segment === ".git" || segment === "node_modules",
+  );
+}
+
+function docsBuilderOutputPath(filename: string | Buffer | null): boolean {
+  return pathSegments(filename)[0] === ".artifacts";
+}
+
+export interface WatchRefreshOptions {
+  /** Called once per batch of source changes, after `rebuild` finishes. */
+  refresh?: () => void;
+  /** Longest wait for docs-builder output before refreshing anyway. */
+  outputSettleMs?: number;
 }
 
 export async function watchRepository(
@@ -155,13 +169,29 @@ export async function watchRepository(
   warn: (message: string) => void,
   watchFactory: RecursiveWatchFactory | undefined,
   onFatal: (error: Error) => void | Promise<void>,
+  { refresh, outputSettleMs = 4000 }: WatchRefreshOptions = {},
 ): Promise<RepositoryWatcher> {
   let timer: NodeJS.Timeout | undefined;
+  let refreshTimer: NodeJS.Timeout | undefined;
   let closed = false;
   let fatalTriggered = false;
   let rebuildQueue = Promise.resolve();
+  let outputSeen = existsSync(join(repositoryPath, ".artifacts"));
+  let awaitingOutput = false;
+  let rebuildDone = false;
+  let outputArrived = false;
+
+  const flushRefresh = () => {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    awaitingOutput = false;
+    if (!closed) refresh?.();
+  };
 
   const enqueueRebuild = () => {
+    awaitingOutput = outputSeen;
+    rebuildDone = false;
+    outputArrived = false;
     rebuildQueue = rebuildQueue.then(async () => {
       if (closed) return;
       try {
@@ -173,6 +203,14 @@ export async function watchRepository(
           }`,
         );
       }
+      rebuildDone = true;
+      if (!refresh) return;
+      if (!awaitingOutput || outputArrived) {
+        flushRefresh();
+      } else {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(flushRefresh, outputSettleMs);
+      }
     });
   };
 
@@ -182,6 +220,17 @@ export async function watchRepository(
     (_eventType, filename) => {
       if (ignoredWatchPath(filename)) return;
       if (closed) return;
+      if (docsBuilderOutputPath(filename)) {
+        outputSeen = true;
+        if (!awaitingOutput) return;
+        if (!rebuildDone) {
+          outputArrived = true;
+          return;
+        }
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(flushRefresh, 100);
+        return;
+      }
       if (timer) clearTimeout(timer);
       timer = setTimeout(enqueueRebuild, 75);
     },
@@ -229,6 +278,7 @@ export async function watchRepository(
     close: async () => {
       closed = true;
       if (timer) clearTimeout(timer);
+      if (refreshTimer) clearTimeout(refreshTimer);
       const results = await Promise.allSettled([
         Promise.resolve().then(() => watcher.close()),
         rebuildQueue,
@@ -307,7 +357,6 @@ export async function runCli(
           fetch: false,
         });
         server.setReview(review);
-        server.refresh();
         info("Review data refreshed");
       },
       warn,
@@ -332,6 +381,7 @@ export async function runCli(
         }
         await dependencies.onFatal?.(fatalError);
       },
+      { refresh: () => server.refresh() },
     );
     cleanup.register("watcher", watcher.close);
     if (shutdownRequested) {

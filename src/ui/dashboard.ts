@@ -892,6 +892,17 @@ export function createDashboard(
         previewEmpty.hidden = false;
       }
     };
+    const previewScroll = () => {
+      try {
+        const frameDocument = preview.contentDocument;
+        const href = framePreviewHref();
+        if (!frameDocument || !href) return null;
+        const scroller = frameDocument.scrollingElement || frameDocument.documentElement;
+        return { href, y: scroller.scrollTop };
+      } catch {
+        return null;
+      }
+    };
     const persistState = () => {
       try {
         sessionStorage.setItem("docs-review-state", JSON.stringify({
@@ -903,6 +914,7 @@ export function createDashboard(
           sidebarCollapsed: workspace.classList.contains("sidebar-collapsed"),
           sidebarWidth: sidebarWidth(),
           scrollTop: fileList.scrollTop,
+          previewScroll: previewScroll(),
         }));
       } catch {
         // Storage can be disabled without breaking the review UI.
@@ -973,6 +985,12 @@ export function createDashboard(
       applyPageSort();
       applyFilters();
       if (Number.isFinite(state.scrollTop)) fileList.scrollTop = state.scrollTop;
+      if (
+        typeof state.previewScroll?.href === "string" &&
+        Number.isFinite(state.previewScroll.y)
+      ) {
+        window.pendingPreviewScroll = state.previewScroll;
+      }
       const activeLink = typeof state.activeHref === "string"
         ? previewLinks.find(
             (link) => link.getAttribute("href") === state.activeHref,
