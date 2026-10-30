@@ -136,6 +136,27 @@ test("creates, persists, and exports inline edit suggestions", async ({
     await expect(browserPage.locator("#suggestions-count")).toHaveText(
       "0 suggestions",
     );
+
+    await browserPage
+      .frameLocator('iframe[name="docs-preview"]')
+      .locator("#target")
+      .evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      });
+    await expect(editor).toBeVisible();
+    await textarea.fill("Make this sentence shorter.");
+    await editor.getByText("Instruction", { exact: true }).click();
+    await expect(editor).toBeVisible();
+    await browserPage.locator("h1").click();
+    await expect(editor).toBeHidden();
+    await expect(browserPage.locator(".suggestion-item-kind")).toHaveText(
+      "Instruction",
+    );
   } finally {
     await Promise.all(servers.splice(0).map((server) => server.close()));
     await close(upstream);

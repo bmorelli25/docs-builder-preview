@@ -804,6 +804,10 @@ export const suggestionScript = `
     }
   });
 
+  editor.addEventListener("mousedown", (event) => {
+    if (event.target !== editorText) event.preventDefault();
+  });
+
   document.addEventListener("mousedown", (event) => {
     if (popover && !preview.contains(event.target)) hidePopover();
     if (editor.hidden) return;
