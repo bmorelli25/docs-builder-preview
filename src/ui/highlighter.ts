@@ -42,6 +42,14 @@ function tabTitle(
   return title ? { tabTitle: normalizeVisibleText(title, substitutions) } : {};
 }
 
+function stepTitle(
+  source: string,
+  substitutions?: Record<string, string>,
+): string {
+  const title = source.match(/^\s*:{3,}\{step\}[ \t]+(.+)$/m)?.[1];
+  return title ? normalizeVisibleText(title, substitutions) : "";
+}
+
 export function createHighlighterData(review: ReviewModel): string {
   return safeJson({
     repositoryPath: review.repositoryPath,
@@ -50,7 +58,8 @@ export function createHighlighterData(review: ReviewModel): string {
       sourceBase: createSourceBase(review.repositoryPath, file.path),
       blocks: file.blocks.map((block) => ({
           ...block,
-          text: normalizeVisibleText(block.source, review.substitutions),
+          text: normalizeVisibleText(block.source, review.substitutions) ||
+            stepTitle(block.source, review.substitutions),
           ...tabTitle(block.source, review.substitutions),
         })),
     })),

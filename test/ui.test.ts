@@ -417,6 +417,31 @@ describe("generated browser assets", () => {
     expect(createHighlighterData(review)).toContain('"text":"Read the guide"');
   });
 
+  it("matches a changed step line by its title", () => {
+    const review: ReviewModel = {
+      repositoryPath: "/tmp/repo",
+      baseRef: "main",
+      mergeBase: "abc",
+      files: [
+        {
+          ...rootFile,
+          blocks: [
+            {
+              kind: "modified",
+              startLine: 159,
+              endLine: 159,
+              source: "::::{step} Assess criticality and context",
+            },
+          ],
+        },
+      ],
+      warnings: [],
+    };
+    expect(createHighlighterData(review)).toContain(
+      '"text":"Assess criticality and context"',
+    );
+  });
+
   it("exposes changed tab titles with substitutions applied", () => {
     const review: ReviewModel = {
       repositoryPath: "/tmp/repo",

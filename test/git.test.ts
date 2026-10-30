@@ -311,6 +311,34 @@ describe("buildReview", () => {
     ]);
   });
 
+  it("expands a changed include into the snippet's blocks", async () => {
+    const repositoryPath = await createRepository();
+    await write(
+      repositoryPath,
+      "docs/_snippets/note.md",
+      ":::{warning}\n:applies_to: stack: deprecated 9.6+\nSnippet body.\n:::\n",
+    );
+    await write(repositoryPath, "docs/page.md", "# Title\n\nBody.\n");
+    await commitAll(repositoryPath, "base");
+    await git(repositoryPath, "switch", "-c", "feature");
+    await write(
+      repositoryPath,
+      "docs/page.md",
+      "# Title\n\n::::{include} /docs/_snippets/note.md\n::::\n\nBody.\n",
+    );
+
+    const review = await buildReview(repositoryPath, "main", false);
+
+    expect(review.files[0].blocks).toEqual([
+      expect.objectContaining({
+        kind: "added",
+        startLine: 3,
+        endLine: 4,
+        source: expect.stringContaining("Snippet body."),
+      }),
+    ]);
+  });
+
   it("reports frontmatter changes separately from body blocks", async () => {
     const repositoryPath = await createRepository();
     await write(

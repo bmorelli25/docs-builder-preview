@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type {
@@ -362,6 +362,55 @@ function overlaps(
   return left.startLine <= right.endLine && right.startLine <= left.endLine;
 }
 
+async function includedSource(
+  gitRoot: string,
+  filePath: string,
+  target: string,
+): Promise<string | undefined> {
+  const fullPath = target.startsWith("/")
+    ? join(gitRoot, target)
+    : join(gitRoot, dirname(filePath), target);
+  try {
+    const resolvedPath = await realpath(fullPath);
+    const relativePath = relative(await realpath(gitRoot), resolvedPath);
+    if (
+      relativePath === ".." ||
+      relativePath.startsWith(`..${sep}`) ||
+      isAbsolute(relativePath)
+    ) {
+      return undefined;
+    }
+    return await readFile(resolvedPath, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+async function expandIncludes(
+  gitRoot: string,
+  filePath: string,
+  blocks: ChangedBlock[],
+): Promise<ChangedBlock[]> {
+  const expanded = await Promise.all(
+    blocks.map(async (block) => {
+      const target = block.source.match(
+        /^\s*(?::{3,}|`{3,})\{include\}\s+(\S+)/m,
+      )?.[1];
+      if (!target) return [block];
+      const source = await includedSource(gitRoot, filePath, target);
+      const included = source === undefined ? [] : segmentMarkdown(source);
+      if (included.length === 0) return [block];
+      return included.map((includedBlock) => ({
+        kind: block.kind,
+        startLine: block.startLine,
+        endLine: block.endLine,
+        source: includedBlock.source,
+      }));
+    }),
+  );
+  return expanded.flat();
+}
+
 function splitFrontmatterChanges(
   source: string,
   diff: Omit<ParsedDiff, "addedLines" | "deletedLines">,
@@ -622,11 +671,15 @@ export async function buildReview(
           addedLines: parsedDiff.addedLines,
           deletedLines: parsedDiff.deletedLines,
           deletedHunks: split.deletedHunks,
-          blocks: semanticChangedBlocks(
-            currentSource,
-            split.blocks,
-            split.deletionAnchors,
-            file.status === "added",
+          blocks: await expandIncludes(
+            gitRoot,
+            file.path,
+            semanticChangedBlocks(
+              currentSource,
+              split.blocks,
+              split.deletionAnchors,
+              file.status === "added",
+            ),
           ),
           ...(split.frontmatter && { frontmatter: split.frontmatter }),
         };
