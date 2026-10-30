@@ -91,13 +91,37 @@ describe("segmentMarkdown", () => {
         text: "const answer = 42;",
       },
       {
-        kind: "directive",
-        startLine: 14,
-        endLine: 18,
-        source:
-          ":::{note}\n:class: compact\n\nRead the *warning*.\n:::",
+        kind: "paragraph",
+        startLine: 17,
+        endLine: 17,
+        source: "Read the *warning*.",
         text: "Read the warning.",
       },
+    ]);
+  });
+
+  it("segments the content of nested colon directives", () => {
+    const source = [
+      "::::{tab-set}",
+      ":::{tab-item} Docker",
+      "Run the **image**.",
+      ":::",
+      ":::{tab-item} Kubernetes",
+      "- Apply the manifest.",
+      ":::",
+      "::::",
+      "",
+      "::::{admonition} Requirements",
+      "Needs a {{stack}} subscription.",
+      "::::",
+    ].join("\n");
+
+    expect(
+      segmentMarkdown(source).map(({ kind, startLine, text }) => [kind, startLine, text]),
+    ).toEqual([
+      ["paragraph", 3, "Run the image."],
+      ["list-item", 6, "Apply the manifest."],
+      ["paragraph", 11, "Needs a \uFFFC subscription."],
     ]);
   });
 
@@ -184,10 +208,10 @@ describe("segmentMarkdown", () => {
 
     expect(segmentMarkdown(source)).toEqual([
       {
-        kind: "directive",
-        startLine: 1,
+        kind: "paragraph",
+        startLine: 4,
         endLine: 5,
-        source,
+        source: "First line.\nLast *line*.",
         text: "First line. Last line.",
       },
     ]);

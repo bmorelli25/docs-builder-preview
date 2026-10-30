@@ -414,14 +414,14 @@ export function segmentMarkdown(source: string): SourceBlock[] {
       if (directiveName === "include" || directiveName === "literalinclude") {
         continue;
       }
-      const candidate = block(
-        "directive",
-        lines,
-        start,
-        end,
-        lines.slice(start + 1, Math.max(start + 1, contentEnd)).join("\n"),
-      );
-      if (candidate) blocks.push(candidate);
+      const body = lines.slice(start + 1, Math.max(start + 1, contentEnd));
+      for (const child of segmentMarkdown(body.join("\n"))) {
+        blocks.push({
+          ...child,
+          startLine: child.startLine + start + 1,
+          endLine: child.endLine + start + 1,
+        });
+      }
       continue;
     }
 
