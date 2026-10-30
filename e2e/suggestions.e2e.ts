@@ -161,12 +161,13 @@ test("creates, persists, and exports inline edit suggestions", async ({
       "1 suggestion",
     );
 
-    // Clicking away cancels without saving.
+    // Escape cancels without saving.
     browserPage.once("dialog", (dialog) => dialog.accept());
     await browserPage.locator("#suggestions-clear-all").click();
     await expect(browserPage.locator("#suggestions-count")).toHaveText(
       "0 suggestions",
     );
+    await browserPage.waitForTimeout(600);
     await browserPage
       .frameLocator('iframe[name="docs-preview"]')
       .locator("#target")
@@ -180,7 +181,7 @@ test("creates, persists, and exports inline edit suggestions", async ({
       });
     await expect(editor).toBeVisible();
     await textarea.fill("This should be discarded.");
-    await browserPage.locator("h1").click();
+    await textarea.press("Escape");
     await expect(editor).toBeHidden();
     await expect(browserPage.locator("#suggestions-count")).toHaveText(
       "0 suggestions",
