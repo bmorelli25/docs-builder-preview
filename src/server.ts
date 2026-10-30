@@ -8,18 +8,30 @@ import {
 } from "node:http";
 import { request as httpsRequest } from "node:https";
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import type { ChangedFile, ReviewModel } from "./model.js";
 import { openingTagEnd, rewritePreviewHtml } from "./preview-html.js";
 import { createReviewChecks } from "./review-checks.js";
 import { sourcePathToRoute } from "./routes.js";
+import { createSourceLocator, type SourceLocator } from "./source-locate.js";
+import { createSuggestions, type Suggestions } from "./suggestions.js";
 import { createDashboard } from "./ui/dashboard.js";
 import { reviewStyles } from "./ui/styles.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface ServerOptions {
   review: ReviewModel;
   port?: number;
   upstreamUrl?: string;
   docsBuilderStatus?: DocsBuilderStatus;
+  suggestions?: {
+    branch?: string;
+    locator?: SourceLocator;
+    storageDir?: string;
+  };
 }
 
 export interface DocsBuilderStatus {
@@ -346,11 +358,53 @@ async function proxyRequest(
   });
 }
 
+async function currentBranch(repositoryPath: string): Promise<string> {
+  try {
+    const branch = (
+      await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd: repositoryPath,
+        encoding: "utf8",
+      })
+    ).stdout.trim();
+    return branch && branch !== "HEAD" ? branch : "HEAD";
+  } catch {
+    return "HEAD";
+  }
+}
+
 export async function startReviewServer(
   options: ServerOptions,
 ): Promise<RunningServer> {
   let review = options.review;
   const reviewChecks = createReviewChecks(() => review);
+  const suggestionLocator =
+    options.suggestions?.locator ??
+    (await createSourceLocator({
+      repositoryPath: review.repositoryPath,
+      substitutions: () => review.substitutions ?? {},
+    }).catch(
+      (): SourceLocator => ({
+        rebuild: async () => undefined,
+        fileForRoute: () => undefined,
+        locate: async (route, quote) => ({
+          path: `${route.replace(/^\//, "") || "page"}.md`,
+          startLine: 1,
+          endLine: 1,
+          source: quote.exact,
+          exact: quote.exact,
+          found: false,
+        }),
+      }),
+    ));
+  const suggestionBranch =
+    options.suggestions?.branch ?? (await currentBranch(review.repositoryPath));
+  const suggestions: Suggestions = await createSuggestions({
+    repositoryPath: review.repositoryPath,
+    branch: suggestionBranch,
+    locator: suggestionLocator,
+    getReview: () => review,
+    storageDir: options.suggestions?.storageDir,
+  });
   let docsBuilderStatus = boundedStatus(
     options.docsBuilderStatus ??
       (options.upstreamUrl
@@ -391,6 +445,7 @@ export async function startReviewServer(
       return;
     }
     if (await reviewChecks.handle(request, response, target)) return;
+    if (await suggestions.handle(request, response, target)) return;
     if (request.method !== "GET" && request.method !== "HEAD") {
       response.setHeader("allow", "GET, HEAD");
       send(response, 405, "Method not allowed");
@@ -400,7 +455,12 @@ export async function startReviewServer(
       send(
         response,
         200,
-        createDashboard(review, docsBuilderStatus, reviewChecks.reviewed()),
+        createDashboard(
+          review,
+          docsBuilderStatus,
+          reviewChecks.reviewed(),
+          suggestions.list(),
+        ),
         "text/html; charset=utf-8",
       );
       return;
@@ -543,6 +603,7 @@ export async function startReviewServer(
     setReview: (nextReview) => {
       review = nextReview;
       reviewChecks.prune(nextReview);
+      void suggestionLocator.rebuild().catch(() => undefined);
     },
     setDocsBuilderStatus: (nextStatus) => {
       const bounded = boundedStatus(nextStatus);

@@ -1,4 +1,6 @@
-export const reviewStyles = `
+import { suggestionPageStyles } from "./suggestions.js";
+
+const baseReviewStyles = `
 [data-docs-review-mark="added"] {
   background: rgba(34, 197, 94, .24) !important;
   outline: 2px solid #16a34a;
@@ -155,3 +157,6 @@ tr[data-docs-review-mark] > th {
   background: #fef2f2;
 }
 `.trim();
+
+export const reviewStyles = `${baseReviewStyles}
+${suggestionPageStyles}`;

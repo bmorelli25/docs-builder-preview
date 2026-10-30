@@ -1,11 +1,18 @@
 import type { ChangedFile, ReviewModel } from "../model.js";
 import { sourcePathToRoute } from "../routes.js";
 import type { DocsBuilderStatus } from "../server.js";
+import type { Suggestion } from "../suggestions.js";
 import {
   createHighlighterData,
   parentHighlighterScript,
 } from "./highlighter.js";
 import { reviewCheckScript, reviewCheckStyles } from "./review-checks.js";
+import {
+  suggestionDashboardStyles,
+  suggestionScript,
+  suggestionsBootstrap,
+  suggestionsPanelMarkup,
+} from "./suggestions.js";
 
 function escapeHtml(value: string): string {
   return value.replace(
@@ -144,6 +151,7 @@ export function createDashboard(
   review: ReviewModel,
   docsBuilderStatus: DocsBuilderStatus = { state: "starting", logs: [] },
   reviewedPaths: ReadonlySet<string> = new Set(),
+  initialSuggestions: Suggestion[] = [],
 ): string {
   const previewable = review.files.filter(
     (file) => file.route && file.status !== "deleted",
@@ -642,6 +650,7 @@ export function createDashboard(
     }
   </style>
   <style>${reviewCheckStyles}</style>
+  <style>${suggestionDashboardStyles}</style>
 </head>
 <body>
   <div class="app-shell">
@@ -693,6 +702,7 @@ export function createDashboard(
           </div>
           ${docsBuilderPanel}
           ${warningPanel}
+          ${suggestionsPanelMarkup(initialSuggestions)}
         </div>
         <nav class="file-list" aria-label="Review files">
           ${groups || '<p class="no-results">No changed documentation files.</p>'}
@@ -712,6 +722,10 @@ export function createDashboard(
             <input id="hide-deleted-lines" type="checkbox">
             <span>Hide deleted lines</span>
           </label>
+          <label class="suggest-edits-control" for="suggest-edits">
+            <input id="suggest-edits" type="checkbox" checked>
+            <span>Suggest edits</span>
+          </label>
           <details id="unmatched-panel" hidden>
             <summary>Unmatched source blocks</summary>
             <ul id="unmatched-list"></ul>
@@ -727,6 +741,7 @@ export function createDashboard(
     </main>
   </div>
   <script type="application/json" id="review-data">${createHighlighterData(review)}</script>
+  <script type="application/json" id="suggestions-data">${suggestionsBootstrap(initialSuggestions)}</script>
   <script>
     const reviewEvents = new EventSource("/api/events");
     reviewEvents.addEventListener("refresh", () => {
@@ -1020,6 +1035,7 @@ export function createDashboard(
   </script>
   <script>${parentHighlighterScript}</script>
   <script>${reviewCheckScript}</script>
+  <script>${suggestionScript}</script>
 </body>
 </html>`;
 }
